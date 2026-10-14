@@ -4,17 +4,19 @@ on:
   pull_request:
     branches:
       - main
-      - develop
+
   push:
     branches:
       - main
-      - develop
 
 permissions:
   contents: read
   pull-requests: read
 
 jobs:
+  # ------------------------------------
+  # 1. Detect changed files
+  # ------------------------------------
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
@@ -39,6 +41,9 @@ jobs:
               - 'backend/**'
               - '.github/workflows/ci.yml'
 
+  # ------------------------------------
+  # 2. Frontend checks
+  # ------------------------------------
   frontend-checks:
     name: Frontend Checks
     needs: detect-changes
@@ -69,6 +74,9 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+  # ------------------------------------
+  # 3. Backend checks
+  # ------------------------------------
   backend-checks:
     name: Backend Checks
     needs: detect-changes
@@ -96,4 +104,45 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run backend tests
-        run: python -m pytest -q
+        # Live Gemini integration tests require GEMINI_API_KEY and are run separately.
+        run: python -m pytest -q -m "not integration"
+
+  # ------------------------------------
+  # 4. Final CI Gate
+  # ------------------------------------
+  ci-gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+
+    needs:
+      - detect-changes
+      - frontend-checks
+      - backend-checks
+
+    if: always()
+
+    steps:
+      - name: Verify CI results
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-checks.result }}
+          BACKEND_RESULT: ${{ needs.backend-checks.result }}
+          FRONTEND_CHANGED: ${{ needs.detect-changes.outputs.frontend }}
+          BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend }}
+        run: |
+          if [[ "$DETECT_RESULT" != "success" ]]; then
+            echo "Change detection failed."
+            exit 1
+          fi
+
+          if [[ "$FRONTEND_CHANGED" == "true" && "$FRONTEND_RESULT" != "success" ]]; then
+            echo "Frontend checks failed or did not run."
+            exit 1
+          fi
+
+          if [[ "$BACKEND_CHANGED" == "true" && "$BACKEND_RESULT" != "success" ]]; then
+            echo "Backend checks failed or did not run."
+            exit 1
+          fi
+
+          echo "All required CI checks passed."

@@ -1,95 +1,238 @@
-import { useRef, useState } from 'react'
-import { ImagePlus, Sparkles } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ImagePlus, LoaderCircle, Sparkles } from 'lucide-react'
+import {
+  AnalysisApiError,
+  getIngredientAnalysis,
+  startIngredientAnalysis,
+} from '../../api/analysis'
 import { SubmissionApiError, submitIngredients } from '../../api/submissions'
-import type {
-  IngredientSubmissionResponse,
-  SubmissionErrorType,
-} from '../../types/submission'
+import type { IngredientAnalysisResponse } from '../../types/analysis'
+import type { IngredientSubmissionResponse } from '../../types/submission'
 import SectionHeading from '../ui/SectionHeading'
+import Toast, { type ToastKind } from '../ui/Toast'
+import AnalysisResults from './AnalysisResults'
 import PasteIngredientsTab from './PasteIngredientsTab'
 import UploadImageTab from './UploadImageTab'
+
+function setSubmissionIdInUrl(submissionId: string) {
+  const url = new URL(window.location.href)
+  url.searchParams.set('submission_id', submissionId)
+  window.history.replaceState({}, '', url)
+}
+
+function clearSubmissionIdFromUrl() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('submission_id')
+  window.history.replaceState({}, '', url)
+}
+
+function getSubmissionIdFromUrl(): string | null {
+  return new URLSearchParams(window.location.search).get('submission_id')
+}
+
+function getAnalysisErrorMessage(error: unknown): string {
+  if (error instanceof AnalysisApiError) {
+    if (
+      error.code === 'GEMINI_UNAVAILABLE' ||
+      error.code === 'GEMINI_RATE_LIMIT' ||
+      error.code === 'GEMINI_TIMEOUT' ||
+      error.status === 429 ||
+      error.status === 502 ||
+      error.status === 503 ||
+      error.status === 504
+    ) {
+      return 'Our analysis service is temporarily unavailable. Your ingredient list is saved. Please try again shortly.'
+    }
+
+    if (error.code === 'GEMINI_AUTH_ERROR') {
+      return 'Our analysis service is temporarily unavailable. Your ingredient list is saved; please try again later.'
+    }
+
+    if (error.status === 404) {
+      return 'We could not find this submission. Submit your ingredient list again to start a new analysis.'
+    }
+
+    return error.message
+  }
+
+  return error instanceof Error
+    ? `Could not reach the IngredientIQ API: ${error.message}`
+    : 'Could not reach the IngredientIQ API. Please try again.'
+}
 
 function IngredientAnalyzer() {
   const [activeTab, setActiveTab] = useState<'paste' | 'upload'>('paste')
   const [ingredientText, setIngredientText] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const isSubmittingRef = useRef(false)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [isRetrieving, setIsRetrieving] = useState(false)
+  const submitRequestRef = useRef(false)
+  const analysisRequestRef = useRef(false)
+  const retrievalRequestRef = useRef(false)
   const [submission, setSubmission] =
     useState<IngredientSubmissionResponse | null>(null)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [errorType, setErrorType] = useState<SubmissionErrorType | null>(null)
+  const [submissionId, setSubmissionId] = useState<string | null>(
+    getSubmissionIdFromUrl,
+  )
+  const [analysis, setAnalysis] =
+    useState<IngredientAnalysisResponse | null>(null)
+  const [analysisError, setAnalysisError] = useState<string | null>(null)
+  const [toast, setToast] = useState<{
+    kind: ToastKind
+    message: string
+  } | null>(null)
+  const [analysisRetryAction, setAnalysisRetryAction] = useState<
+    'analyze' | 'retrieve'
+  >('analyze')
+
+  const closeToast = useCallback(() => setToast(null), [])
+
+  async function handleAnalyze(submissionId: string) {
+    if (analysisRequestRef.current) {
+      return
+    }
+
+    analysisRequestRef.current = true
+    setIsAnalyzing(true)
+    setAnalysis(null)
+    setAnalysisError(null)
+    setAnalysisRetryAction('analyze')
+
+    try {
+      const result = await startIngredientAnalysis(submissionId)
+      setAnalysis(result)
+    } catch (error) {
+      const message = getAnalysisErrorMessage(error)
+      setAnalysisError(message)
+      setToast({ kind: 'error', message })
+    } finally {
+      analysisRequestRef.current = false
+      setIsAnalyzing(false)
+    }
+  }
+
+  const handleRetrieveAnalysis = useCallback(async (submissionId: string) => {
+    if (retrievalRequestRef.current) {
+      return
+    }
+
+    retrievalRequestRef.current = true
+    setIsRetrieving(true)
+    setAnalysisError(null)
+    setAnalysisRetryAction('retrieve')
+
+    try {
+      const result = await getIngredientAnalysis(submissionId)
+      setAnalysis(result)
+      setAnalysisRetryAction(result.status === 'FAILED' ? 'analyze' : 'retrieve')
+      if (result.status === 'PROCESSING' || result.status === 'PENDING') {
+        setAnalysisError(null)
+      }
+    } catch (error) {
+      const message = getAnalysisErrorMessage(error)
+      setAnalysisError(message)
+      setToast({ kind: 'error', message })
+    } finally {
+      retrievalRequestRef.current = false
+      setIsRetrieving(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    const submissionId = getSubmissionIdFromUrl()
+    if (!submissionId) {
+      return
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void handleRetrieveAnalysis(submissionId)
+    }, 0)
+    return () => window.clearTimeout(timeoutId)
+  }, [handleRetrieveAnalysis])
 
   function handleIngredientTextChange(value: string) {
     setIngredientText(value)
     setSubmission(null)
-    setErrorMessage(null)
-    setErrorType(null)
+    setSubmissionId(null)
+    setAnalysis(null)
+    setAnalysisError(null)
+    clearSubmissionIdFromUrl()
   }
 
   async function handleSubmit() {
-    if (isSubmittingRef.current) {
+    if (submitRequestRef.current) {
       return
     }
 
     const normalizedText = ingredientText.trim()
     if (normalizedText.length < 3 || normalizedText.length > 10000) {
       setSubmission(null)
-      setErrorType('validation')
-      setErrorMessage(
-        normalizedText.length < 3
-          ? 'Enter at least 3 characters of ingredient text.'
-          : 'Ingredient text must be no longer than 10,000 characters.',
-      )
+      setToast({
+        kind: 'error',
+        message:
+          normalizedText.length < 3
+            ? 'Enter at least 3 characters of ingredient text.'
+            : 'Ingredient text must be no longer than 10,000 characters.',
+      })
       return
     }
 
-    isSubmittingRef.current = true
+    submitRequestRef.current = true
     setIsSubmitting(true)
     setSubmission(null)
-    setErrorMessage(null)
-    setErrorType(null)
+    setSubmissionId(null)
+    clearSubmissionIdFromUrl()
+    setAnalysis(null)
+    setAnalysisError(null)
 
     try {
       const result = await submitIngredients({
         ingredient_text: normalizedText,
       })
       setSubmission(result)
+      setSubmissionId(result.submission_id)
+      setSubmissionIdInUrl(result.submission_id)
+      setToast({ kind: 'success', message: result.message })
+      await handleAnalyze(result.submission_id)
     } catch (error) {
       if (error instanceof SubmissionApiError) {
-        if (error.status === 422 || error.code === 'VALIDATION_ERROR') {
-          setErrorType('validation')
-          setErrorMessage(
-            'The ingredient list is invalid. Enter between 3 and 10,000 characters and try again.',
-          )
-        } else if (
-          error.status === 503 ||
-          error.code === 'DATABASE_UNAVAILABLE'
-        ) {
-          setErrorType('server')
-          setErrorMessage(
-            'IngredientIQ cannot save your submission right now. Please try again shortly.',
-          )
-        } else {
-          setErrorType('server')
-          setErrorMessage(
-            error.status >= 500 || error.code === 'INTERNAL_SERVER_ERROR'
-              ? 'The server could not process your submission. Please try again later.'
-              : error.message,
-          )
-        }
+        const message =
+          error.status === 422 || error.code === 'VALIDATION_ERROR'
+            ? 'The ingredient list is invalid. Enter between 3 and 10,000 characters and try again.'
+            : error.status === 503 || error.code === 'DATABASE_UNAVAILABLE'
+              ? 'IngredientIQ cannot save your submission right now. Please try again shortly.'
+              : error.message
+        setToast({ kind: 'error', message })
       } else {
-        setErrorType('network')
-        setErrorMessage(
+        const message =
           error instanceof Error
             ? `Could not reach the IngredientIQ API: ${error.message}`
-            : 'Could not reach the IngredientIQ API. Please try again.',
-        )
+            : 'Could not reach the IngredientIQ API. Please try again.'
+        setToast({ kind: 'error', message })
       }
     } finally {
-      isSubmittingRef.current = false
+      submitRequestRef.current = false
       setIsSubmitting(false)
     }
   }
+
+  function handleAnalysisRetry() {
+    const currentSubmissionId =
+      submission?.submission_id ?? submissionId ?? getSubmissionIdFromUrl()
+    if (!currentSubmissionId) {
+      return
+    }
+
+    if (analysisRetryAction === 'retrieve') {
+      void handleRetrieveAnalysis(currentSubmissionId)
+    } else {
+      void handleAnalyze(currentSubmissionId)
+    }
+  }
+
+  const isBusy = isSubmitting || isAnalyzing || isRetrieving
+  const displayedAnalysis = analysis
+  const isAnalysisLoading = isAnalyzing || isRetrieving
 
   return (
     <section
@@ -149,24 +292,47 @@ function IngredientAnalyzer() {
 
           {activeTab === 'paste' ? (
             <PasteIngredientsTab
-              errorMessage={errorMessage}
-              errorType={errorType}
               ingredientText={ingredientText}
-              isSubmitting={isSubmitting}
+              isSubmitting={isBusy}
               onIngredientTextChange={handleIngredientTextChange}
               onSubmit={handleSubmit}
-              submission={submission}
             />
           ) : (
             <UploadImageTab />
           )}
 
+          {submissionId && (
+            <div className="px-6 sm:px-8 md:px-10">
+              {isSubmitting && !isAnalyzing && (
+                <p className="flex items-center justify-center gap-2 border-t border-[#eeeee8] py-5 text-sm text-[#62685f]" role="status">
+                  <LoaderCircle aria-hidden="true" className="animate-spin" size={17} />
+                  Saving your ingredient list…
+                </p>
+              )}
+              <AnalysisResults
+                analysis={displayedAnalysis}
+                errorMessage={analysisError}
+                isLoading={isAnalysisLoading}
+                onRetry={handleAnalysisRetry}
+                retryLabel={analysisRetryAction === 'retrieve' ? 'Retry loading results' : 'Retry analysis'}
+              />
+            </div>
+          )}
+
           <p className="border-t border-[#eeeee8] px-6 py-4 text-center text-[11px] leading-5 text-[#92958d] sm:px-8">
-            Ingredient text is submitted to the API. AI analysis and image
-            upload are not active yet.
+            Ingredient text is submitted to the API. AI analysis is provided
+            by the IngredientIQ backend; image upload is not active yet.
           </p>
         </div>
       </div>
+      {toast && (
+        <Toast
+          duration={5000}
+          kind={toast.kind}
+          message={toast.message}
+          onClose={closeToast}
+        />
+      )}
     </section>
   )
 }

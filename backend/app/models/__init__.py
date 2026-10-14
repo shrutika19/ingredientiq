@@ -1,1 +1,2 @@
 from app.models.ingredient_submission import IngredientSubmission
+from app.models.ingredient_analysis import IngredientAnalysis
