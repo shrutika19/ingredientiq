@@ -104,7 +104,8 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run backend tests
-        run: python -m pytest -q
+        # Live Gemini integration tests require GEMINI_API_KEY and are run separately.
+        run: python -m pytest -q -m "not integration"
 
   # ------------------------------------
   # 4. Final CI Gate
