@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+from pydantic import SecretStr
 
 class Settings(BaseSettings):
     # Application configuration
@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     DB_NAME: str
     DB_USER: str
     DB_PASSWORD: str
+
+    # Gemini AI configuration
+    GEMINI_API_KEY: SecretStr | None = None
+    GEMINI_MODEL: str = "gemini-2.5-flash-lite"
+    GEMINI_TIMEOUT_SECONDS: int = Field(
+        default=30,
+        ge=1,
+        le=120,
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
