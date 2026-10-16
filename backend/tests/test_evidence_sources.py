@@ -23,7 +23,7 @@ def test_source_ids_are_unique():
 
 def test_source_urls_use_https():
     for source in get_evidence_sources():
-        parsed = urlparse(source.url)
+        parsed = urlparse(source.original_url)
 
         assert parsed.scheme == "https"
         assert parsed.hostname
@@ -36,7 +36,7 @@ def test_required_evidence_types_are_present():
     }
 
     assert evidence_types == {
-        EvidenceType.REGULATORY,
-        EvidenceType.GOVERNMENT_GUIDANCE,
-        EvidenceType.SCIENTIFIC_ASSESSMENT,
+        EvidenceType.INGREDIENT_REFERENCE,
+        EvidenceType.SAFETY_OPINION,
+        EvidenceType.SCIENTIFIC_LITERATURE,
     }
