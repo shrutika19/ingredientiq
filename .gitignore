@@ -43,6 +43,7 @@ Thumbs.db
 
 *.log
 logs/
+backend/ingestion_logs/
 
 *.tmp
 *.temp
