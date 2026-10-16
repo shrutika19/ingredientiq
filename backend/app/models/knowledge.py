@@ -128,8 +128,8 @@ class EvidenceDocument(Base):
     retrieved_date: Mapped[date] = mapped_column(
         Date, nullable=False,
     )
-    content_hash: Mapped[str] = mapped_column(
-        String(64), nullable=False,
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
     )
     license: Mapped[str] = mapped_column(
         Text, nullable=False,

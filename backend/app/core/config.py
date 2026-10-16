@@ -32,6 +32,13 @@ class Settings(BaseSettings):
         le=120,
     )
 
+    # RAG embedding configuration
+    EMBEDDING_MODEL: str = "gemini-embedding-001"
+    EMBEDDING_DIMENSIONS: int = Field(default=768, ge=1)
+    EMBEDDING_TIMEOUT_SECONDS: int = Field(default=30, ge=1, le=120)
+    EMBEDDING_MAX_RETRIES: int = Field(default=3, ge=1, le=5)
+    CHUNK_MAX_WORDS: int = Field(default=180, ge=30, le=400)
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

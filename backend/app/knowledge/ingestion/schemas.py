@@ -23,7 +23,7 @@ class SeedDocument(BaseModel):
     retrieved_date: date
     license: NonEmpty
     evidence_type: NonEmpty
-    content: NonEmpty
+    content: NonEmpty | None = None
     location_reference: str | None = None
     ingredient_names: list[NonEmpty] = Field(min_length=1)
 
