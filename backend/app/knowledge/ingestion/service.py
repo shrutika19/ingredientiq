@@ -1,11 +1,11 @@
 
 from dataclasses import dataclass
-from datetime import date
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.knowledge.chunking import chunk_document
 from app.knowledge.ingestion.normalizer import (
     content_hash,
     normalize_content,
@@ -46,7 +46,7 @@ def ingest_document(
             f"Unknown or inactive source: {item.source_key}"
         )
 
-    if not source.full_text_storage_allowed:
+    if item.content is not None and not source.full_text_storage_allowed:
         raise IngestionRejected(
             "Source is not approved for content storage"
         )
@@ -56,16 +56,36 @@ def ingest_document(
             "Document license differs from approved source license"
         )
 
-    normalized = normalize_content(item.content)
-    if not normalized:
-        raise IngestionRejected("Empty normalized content")
-
-    if len(normalized) > 5000:
+    if (
+        item.content is not None
+        and source.license == "PERMISSION_REVIEW_REQUIRED"
+    ):
         raise IngestionRejected(
-            "Content exceeds the MVP single-chunk limit"
+            "Cannot store content while source permission is unverified"
         )
 
-    digest = content_hash(normalized)
+    if item.content is None:
+        if source.full_text_storage_allowed:
+            raise IngestionRejected(
+                "Content is required for sources approved for storage"
+            )
+        normalized = None
+        prepared_chunks = []
+        digest = None
+    else:
+        normalized = normalize_content(item.content)
+        if not normalized:
+            raise IngestionRejected("Empty normalized content")
+
+        try:
+            prepared_chunks = chunk_document(
+                normalized,
+                location_reference=item.location_reference,
+            )
+        except ValueError as exc:
+            raise IngestionRejected(str(exc)) from exc
+
+        digest = content_hash(normalized)
     url = str(item.original_url)
 
     existing = db.scalar(
@@ -77,15 +97,29 @@ def ingest_document(
     )
 
     if existing is not None:
-        if existing.content_hash == digest:
-            return IngestionResult(
-                status="skipped",
-                reason="Unchanged document version",
-                document_id=existing.id,
+        if existing.content_hash != digest:
+            raise IngestionRejected(
+                "Existing source version has different content; "
+                "assign a new source_version"
             )
-        raise IngestionRejected(
-            "Existing source version has different content; "
-            "assign a new source_version"
+
+        chunk_count = db.scalar(
+            select(func.count(EvidenceChunk.id)).where(
+                EvidenceChunk.document_id == existing.id
+            )
+        )
+
+        if item.content is not None:
+            if chunk_count != len(prepared_chunks):
+                raise IngestionRejected(
+                    "Existing document has incomplete chunks; "
+                    "requires an approved backfill"
+                )
+
+        return IngestionResult(
+            status="skipped",
+            reason="Unchanged document version",
+            document_id=existing.id,
         )
 
     # Validate all identities before making changes.
@@ -149,19 +183,20 @@ def ingest_document(
             )
         )
 
-    db.add(
-        EvidenceChunk(
-            source_id=source.id,
-            document_id=document.id,
-            chunk_index=0,
-            content=normalized,
-            content_hash=digest,
-            location_reference=item.location_reference,
-            embedding=None,
-            embedding_model=None,
-            is_active=True,
+    for chunk in prepared_chunks:
+        db.add(
+            EvidenceChunk(
+                source_id=source.id,
+                document_id=document.id,
+                chunk_index=chunk.index,
+                content=chunk.content,
+                content_hash=chunk.content_hash,
+                location_reference=chunk.location_reference,
+                embedding=None,
+                embedding_model=None,
+                is_active=True,
+            )
         )
-    )
 
     db.flush()
 

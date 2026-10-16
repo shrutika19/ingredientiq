@@ -1,0 +1,18 @@
+
+{
+  "documents": [
+    {
+      "source_key": "EU_COSING",
+      "title": "Glycerin — Cosmetic Ingredient Reference",
+      "original_url": "https://single-market-economy.ec.europa.eu/sectors/cosmetics/cosmetic-ingredient-database_en",
+      "source_version": "2026-10-16-metadata",
+      "publication_date": null,
+      "retrieved_date": "2026-10-16",
+      "license": "PERMISSION_REVIEW_REQUIRED",
+      "evidence_type": "ingredient_reference",
+      "ingredient_names": [
+        "glycerin"
+      ]
+    }
+  ]
+}
