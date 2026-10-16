@@ -1,0 +1,20 @@
+
+{
+  "documents": [
+    {
+      "source_key": "TEST_SOURCE",
+      "title": "Synthetic Glycerin Test Record",
+      "original_url": "https://example.org/test/glycerin",
+      "source_version": "v1",
+      "publication_date": "2026-01-01",
+      "retrieved_date": "2026-10-16",
+      "license": "TEST_ONLY",
+      "evidence_type": "scientific_literature",
+      "content": "Synthetic content used to verify the ingestion pipeline. This is not scientific evidence and must not be used for ingredient analysis.",
+      "location_reference": "test-section-1",
+      "ingredient_names": [
+        "glycerin"
+      ]
+    }
+  ]
+}
