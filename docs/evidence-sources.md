@@ -147,6 +147,7 @@ Before ingestion, ingredient identities, INCI names, synonyms, and applicable di
 - Record the permission decision and the source used to verify it.
 - Store complete documents only when permitted.
 - Where full-text storage is not authorized, retain permitted metadata and links rather than copying restricted material.
+- Metadata-only ingestion omits `content`; it creates no content chunks and cannot be embedded for search.
 - Follow attribution requirements.
 - Recheck licensing when a document or publisher changes.
 

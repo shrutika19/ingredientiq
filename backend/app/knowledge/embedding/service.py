@@ -27,6 +27,8 @@ def process_chunk(
     db: Session,
     chunk_id: UUID,
     client: GeminiEmbeddingClient,
+    *,
+    allow_test_source: bool = False,
 ) -> EmbeddingResult:
     settings = get_settings()
 
@@ -63,9 +65,18 @@ def process_chunk(
         raise ValueError("Source lacks approved content storage permission")
 
     if source.source_key == "TEST_SOURCE":
+        if not(
+            allow_test_source
+            and settings.APP_ENV  in ("development", "testing")
+        ):
+            raise ValueError(
+                "Synthetic test evidence is excluded from real indexing"
+            )
+    elif source.license == "PERMISSION_REVIEW_REQUIRED":
         raise ValueError(
-            "Synthetic test evidence is excluded from real indexing"
+            "Source permission is not verified"
         )
+    
 
     if (
         chunk.embedding is not None
