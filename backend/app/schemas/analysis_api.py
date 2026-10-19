@@ -1,9 +1,10 @@
 
 from datetime import datetime
 from enum import Enum
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.analysis import GeminiAnalysisOutput
 
@@ -15,6 +16,22 @@ class AnalysisApiStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class AnalysisEvidenceReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: UUID
+    source_id: UUID
+    source_identifier: str
+    document_id: UUID
+    document_version: str
+    chunk_id: UUID
+    ingredient_name: str
+    excerpt: str
+    original_url: str
+    document_title: str
+    location_reference: str | None = None
+
+
 class AnalysisApiResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -22,6 +39,16 @@ class AnalysisApiResponse(BaseModel):
     submission_id: UUID
     status: AnalysisApiStatus
     result: GeminiAnalysisOutput | None = None
+    evidence_references: list[AnalysisEvidenceReference] = Field(
+        default_factory=list
+    )
+    evidence_coverage: Literal[
+        "full",
+        "partial",
+        "unavailable",
+    ] = "unavailable"
+    prompt_version: str | None = None
+    retrieval_config: dict[str, Any] = Field(default_factory=dict)
     failure_code: str | None = None
     created_at: datetime
     completed_at: datetime | None = None

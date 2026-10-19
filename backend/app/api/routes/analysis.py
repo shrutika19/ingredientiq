@@ -32,8 +32,35 @@ def to_api_response(
     result = None
 
     if analysis.result is not None:
+        stored_result = dict(analysis.result)
+        if "evidence_status" not in stored_result:
+            stored_result["evidence_status"] = "limited"
+            stored_result["evidence_ids"] = []
+            stored_result["summary"] = (
+                "Limited analysis: this result predates evidence "
+                f"validation and is not source-grounded. "
+                f"{stored_result['summary']}"
+            )
+            stored_result["ingredients"] = [
+                {
+                    **ingredient,
+                    "support_status": "limited",
+                    "evidence_ids": [],
+                }
+                for ingredient in stored_result["ingredients"]
+            ]
+            cautions = list(stored_result["cautions"])
+            product_caution = (
+                "Product-level effects cannot be determined without "
+                "concentrations, full formulation, and individual "
+                "skin context."
+            )
+            if product_caution not in cautions:
+                cautions.append(product_caution)
+            stored_result["cautions"] = cautions
+
         result = GeminiAnalysisOutput.model_validate(
-            analysis.result
+            stored_result
         )
 
     return AnalysisApiResponse(
@@ -41,6 +68,22 @@ def to_api_response(
         submission_id=analysis.submission_id,
         status=analysis.status.value,
         result=result,
+        evidence_references=getattr(
+            analysis,
+            "evidence_references",
+            [],
+        ) or [],
+        evidence_coverage=getattr(
+            analysis,
+            "evidence_coverage",
+            "unavailable",
+        ),
+        prompt_version=getattr(analysis, "prompt_version", None),
+        retrieval_config=getattr(
+            analysis,
+            "retrieval_config",
+            {},
+        ) or {},
         failure_code=analysis.failure_code,
         created_at=analysis.created_at,
         completed_at=analysis.completed_at,
