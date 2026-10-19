@@ -9,10 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.knowledge.embedding.client import EmbeddingError
-from app.knowledge.normalization.parser import (
-    normalize_name,
-    parse_ingredient_list,
+from app.knowledge.normalization.parser import normalize_name
+from app.knowledge.normalization.schemas import (
+    NormalizationResult,
+    ResolutionStatus,
 )
+from app.knowledge.normalization.service import normalize_submission
 from app.knowledge.retrieval.schemas import RetrievedEvidence
 from app.knowledge.retrieval.service import retrieve_ingredient_evidence
 from app.models.ingredient_analysis import (
@@ -40,12 +42,13 @@ from app.services.skincare_analysis_service import (
     MAX_EVIDENCE_SNIPPETS,
     MAX_EVIDENCE_EXCERPT_CHARACTERS,
     analyze_skincare_ingredients,
+    build_evidence_context_records,
 )
 from app.prompts.skincare_v1 import PROMPT_VERSION
 
 
 logger = logging.getLogger(__name__)
-RETRIEVAL_CONFIG_VERSION = "retrieval-v1.0.0"
+RETRIEVAL_CONFIG_VERSION = "retrieval-v1.1.0"
 
 
 class SubmissionNotFound(Exception):
@@ -65,58 +68,114 @@ class AnalysisExecutionFailed(Exception):
 
 def _retrieve_submission_evidence(
     db: Session,
-    ingredient_text: str,
-) -> tuple[list[RetrievedEvidence], dict[str, list[str]]]:
-    ingredient_names = parse_ingredient_list(ingredient_text)
+    submission_id: UUID,
+) -> tuple[
+    list[RetrievedEvidence],
+    dict[str, list[str]],
+    NormalizationResult,
+]:
+    normalization = normalize_submission(db, submission_id)
     evidence: list[RetrievedEvidence] = []
     evidence_by_ingredient: dict[str, list[str]] = {}
-    seen_names: set[str] = set()
+    evidence_by_identity: dict[UUID, list[str]] = {}
     seen_evidence_ids: set[str] = set()
 
-    for ingredient_name in ingredient_names:
-        normalized_name = normalize_name(ingredient_name)
-        if normalized_name in seen_names:
+    for match in normalization.ingredients:
+        if (
+            match.status != ResolutionStatus.RESOLVED
+            or match.ingredient_id is None
+            or match.canonical_name is None
+        ):
             continue
-        seen_names.add(normalized_name)
 
-        remaining = MAX_EVIDENCE_SNIPPETS - len(evidence)
-        if remaining <= 0:
-            break
-
-        retrieval = retrieve_ingredient_evidence(
-            db=db,
-            ingredient_name=ingredient_name,
-            top_k=min(2, remaining),
+        identity_evidence_ids = evidence_by_identity.get(
+            match.ingredient_id
         )
+        if identity_evidence_ids is None:
+            remaining = MAX_EVIDENCE_SNIPPETS - len(evidence)
+            if remaining <= 0:
+                break
 
-        for item in retrieval.evidence[:remaining]:
-            evidence_id = str(item.chunk_id)
-            if evidence_id not in seen_evidence_ids:
-                evidence.append(item)
-                seen_evidence_ids.add(evidence_id)
+            retrieval = retrieve_ingredient_evidence(
+                db=db,
+                ingredient_name=match.canonical_name,
+                top_k=min(2, remaining),
+            )
+            identity_evidence_ids = []
 
-            for name in (ingredient_name, item.ingredient_name):
-                normalized = normalize_name(name)
-                ids = evidence_by_ingredient.setdefault(normalized, [])
+            for item in retrieval.evidence[:remaining]:
+                evidence_id = str(item.chunk_id)
+                identity_evidence_ids.append(evidence_id)
+                if evidence_id not in seen_evidence_ids:
+                    evidence.append(item)
+                    seen_evidence_ids.add(evidence_id)
+
+            evidence_by_identity[match.ingredient_id] = (
+                identity_evidence_ids
+            )
+
+        for name in (match.original_name, match.canonical_name):
+            normalized = normalize_name(name)
+            ids = evidence_by_ingredient.setdefault(normalized, [])
+            for evidence_id in identity_evidence_ids:
                 if evidence_id not in ids:
                     ids.append(evidence_id)
 
-    return evidence, evidence_by_ingredient
+    return evidence, evidence_by_ingredient, normalization
 
 
 def _evidence_coverage(
-    ingredient_text: str,
+    normalization: NormalizationResult,
     evidence_by_ingredient: dict[str, list[str]],
+    result: GeminiAnalysisOutput,
 ) -> str:
-    ingredient_names = {
-        normalize_name(name)
-        for name in parse_ingredient_list(ingredient_text)
+    resolved_identities = {
+        match.ingredient_id: normalize_name(match.canonical_name)
+        for match in normalization.ingredients
+        if (
+            match.status == ResolutionStatus.RESOLVED
+            and match.ingredient_id is not None
+            and match.canonical_name is not None
+        )
     }
-    covered = ingredient_names.intersection(evidence_by_ingredient)
+    if not resolved_identities:
+        return "unavailable"
+
+    covered: set[UUID] = set()
+    for ingredient_id, canonical_name in resolved_identities.items():
+        identity_names = {
+            normalize_name(match.original_name)
+            for match in normalization.ingredients
+            if match.ingredient_id == ingredient_id
+        }
+        identity_names.add(canonical_name)
+        matching_result = next(
+            (
+                item
+                for item in result.ingredients
+                if normalize_name(item.name) in identity_names
+            ),
+            None,
+        )
+        if (
+            matching_result is None
+            or matching_result.support_status != "supported"
+            or not matching_result.evidence_ids
+        ):
+            continue
+
+        retrieved_ids = set().union(
+            *(
+                set(evidence_by_ingredient.get(name, []))
+                for name in identity_names
+            )
+        )
+        if set(matching_result.evidence_ids).issubset(retrieved_ids):
+            covered.add(ingredient_id)
 
     if not covered:
         return "unavailable"
-    if covered == ingredient_names:
+    if covered == set(resolved_identities):
         return "full"
     return "partial"
 
@@ -129,29 +188,14 @@ def _evidence_reference_snapshots(
     for ingredient in result.ingredients:
         used_ids.update(ingredient.evidence_ids)
 
+    model_records = build_evidence_context_records(evidence)
     snapshots = []
-    for item in evidence:
-        evidence_id = str(item.chunk_id)
+    for record in model_records:
+        evidence_id = record["evidence_id"]
         if evidence_id not in used_ids:
             continue
 
-        snapshots.append(
-            {
-                "evidence_id": evidence_id,
-                "source_id": str(item.source_id),
-                "source_identifier": item.source_key,
-                "document_id": str(item.document_id),
-                "document_version": item.source_version,
-                "chunk_id": evidence_id,
-                "ingredient_name": item.ingredient_name,
-                "excerpt": item.excerpt[
-                    :MAX_EVIDENCE_EXCERPT_CHARACTERS
-                ],
-                "original_url": item.original_url,
-                "document_title": item.document_title,
-                "location_reference": item.location_reference,
-            }
-        )
+        snapshots.append(record)
 
     return snapshots
 
@@ -160,6 +204,9 @@ def _retrieval_config_snapshot() -> dict[str, object]:
     settings = get_settings()
     return {
         "version": RETRIEVAL_CONFIG_VERSION,
+        "normalization_version": "ingredient-normalization-v1.0.0",
+        "model_context_version": "evidence-context-v1.0.0",
+        "coverage_definition": "validated-supported-identities-v1",
         "embedding_model": settings.EMBEDDING_MODEL,
         "top_k_per_ingredient": 2,
         "max_evidence_snippets": MAX_EVIDENCE_SNIPPETS,
@@ -224,9 +271,11 @@ def start_analysis(
     mark_processing(db, analysis_id)
 
     try:
-        evidence, evidence_by_ingredient = _retrieve_submission_evidence(
+        evidence, evidence_by_ingredient, normalization = (
+            _retrieve_submission_evidence(
             db,
-            submission.original_text,
+                submission_id,
+            )
         )
 
         result = analyze_skincare_ingredients(
@@ -240,8 +289,9 @@ def start_analysis(
             evidence,
         )
         evidence_coverage = _evidence_coverage(
-            submission.original_text,
+            normalization,
             evidence_by_ingredient,
+            result,
         )
 
         return mark_completed(

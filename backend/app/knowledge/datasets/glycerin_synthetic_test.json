@@ -2,8 +2,8 @@
   "documents": [
     {
       "source_key": "TEST_SOURCE",
-      "title": "Synthetic Glycerin Placeholder (Not Approved Evidence)",
-      "original_url": "https://example.org/test/glycerin-approved-placeholder",
+      "title": "Synthetic Glycerin Test Placeholder (Not Approved Evidence)",
+      "original_url": "https://example.org/test/glycerin-synthetic-placeholder",
       "source_version": "synthetic-placeholder-v1",
       "publication_date": null,
       "retrieved_date": "2026-10-19",

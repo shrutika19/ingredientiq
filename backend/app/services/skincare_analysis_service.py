@@ -2,6 +2,7 @@
 import json
 import logging
 import random
+import re
 import time
 from collections.abc import Mapping, Sequence
 
@@ -89,25 +90,59 @@ def _build_model_input(
     ingredient_text: str,
     retrieved_evidence: Sequence[RetrievedEvidence],
 ) -> str:
+    return json.dumps(
+        {
+            "ingredient_text": ingredient_text,
+            "retrieved_evidence": build_evidence_context_records(
+                retrieved_evidence
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
+def build_evidence_context_records(
+    retrieved_evidence: Sequence[RetrievedEvidence],
+) -> list[dict[str, object]]:
     evidence_records = [
         {
             "evidence_id": str(item.chunk_id),
             "source_identifier": item.source_key,
-            "source_record_id": str(item.source_id),
+            "source_id": str(item.source_id),
+            "document_id": str(item.document_id),
+            "document_version": item.source_version,
+            "chunk_id": str(item.chunk_id),
+            "content_hash": item.content_hash,
+            "relevance_score": item.relevance_score,
             "document_title": item.document_title[:200],
             "original_url": item.original_url[:500],
-            "ingredient": item.ingredient_name,
+            "ingredient_name": item.ingredient_name,
             "excerpt": item.excerpt[:MAX_EVIDENCE_EXCERPT_CHARACTERS],
+            "location_reference": item.location_reference,
         }
         for item in retrieved_evidence[:MAX_EVIDENCE_SNIPPETS]
     ]
+    return evidence_records
 
-    return json.dumps(
-        {
-            "ingredient_text": ingredient_text,
-            "retrieved_evidence": evidence_records,
-        },
-        ensure_ascii=False,
+
+def _normalized_claim_text(value: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+
+def _directly_supported(
+    claim: str,
+    evidence: Sequence[RetrievedEvidence],
+) -> bool:
+    normalized_claim = _normalized_claim_text(claim)
+    if not normalized_claim:
+        return False
+
+    return any(
+        normalized_claim
+        in _normalized_claim_text(
+            item.excerpt[:MAX_EVIDENCE_EXCERPT_CHARACTERS]
+        )
+        for item in evidence
     )
 
 
@@ -160,40 +195,80 @@ def _apply_evidence_status(
     result: GeminiAnalysisOutput,
     retrieved_evidence: Sequence[RetrievedEvidence],
 ) -> GeminiAnalysisOutput:
-    has_supported_findings = any(
-        ingredient.support_status in ("supported", "conflicting")
-        for ingredient in result.ingredients
-    )
-    source_grounded = bool(result.evidence_ids or has_supported_findings)
-
     cautions = list(result.cautions)
     if PRODUCT_CONTEXT_CAUTION not in cautions:
         cautions.append(PRODUCT_CONTEXT_CAUTION)
 
-    updates: dict[str, object] = {
-        "evidence_status": (
-            "source_grounded" if source_grounded else "limited"
-        ),
-        "cautions": cautions,
+    evidence_by_id = {
+        str(item.chunk_id): item
+        for item in retrieved_evidence[:MAX_EVIDENCE_SNIPPETS]
     }
+    data = result.model_dump(mode="python")
+    for ingredient in data["ingredients"]:
+        if ingredient["support_status"] == "limited":
+            continue
 
-    if not source_grounded:
+        cited = [
+            evidence_by_id[evidence_id]
+            for evidence_id in ingredient["evidence_ids"]
+        ]
+        claim_texts = (
+            ingredient["function"],
+            ingredient["explanation"],
+        )
+
+        if ingredient["support_status"] == "conflicting":
+            is_supported = False
+        else:
+            is_supported = all(
+                _directly_supported(claim, cited)
+                for claim in claim_texts
+            )
+
+        if not is_supported:
+            ingredient["support_status"] = "limited"
+            ingredient["evidence_ids"] = []
+            ingredient["explanation"] = (
+                f"{ingredient['explanation']} This finding could not be "
+                "verified directly against the retrieved text and is not "
+                "evidence-backed."
+            )
+
+    summary = result.summary
+    for evidence_id in result.evidence_ids:
+        summary = summary.replace(f"[{evidence_id}]", "")
+    cited_summary_evidence = [
+        evidence_by_id[evidence_id]
+        for evidence_id in result.evidence_ids
+    ]
+    summary_is_supported = bool(result.evidence_ids) and _directly_supported(
+        summary.strip(),
+        cited_summary_evidence,
+    )
+
+    data["cautions"] = cautions
+    data["evidence_status"] = "source_grounded" if summary_is_supported else "limited"
+    data["evidence_ids"] = (
+        result.evidence_ids if summary_is_supported else []
+    )
+
+    if not summary_is_supported:
         limitation = (
-            "Limited analysis: no approved matching evidence was retrieved."
-            if not retrieved_evidence
-            else "Limited analysis: retrieved evidence did not support "
-            "the reported findings."
+            "Limited analysis: the summary could not be verified directly "
+            "against cited retrieved text."
+            if retrieved_evidence
+            else "Limited analysis: no approved matching evidence was retrieved."
         )
         uncertainty = (
-            "Findings are not evidence-backed because no supporting "
-            "retrieved evidence was cited."
+            "Summary claims are not evidence-backed because their wording "
+            "could not be verified directly against cited retrieved text."
         )
-        updates["summary"] = f"{limitation} {result.summary}"
-        updates["uncertainties"] = list(result.uncertainties)
-        if uncertainty not in updates["uncertainties"]:
-            updates["uncertainties"].append(uncertainty)
+        data["summary"] = f"{limitation} {result.summary}"
+        data["uncertainties"] = list(result.uncertainties)
+        if uncertainty not in data["uncertainties"]:
+            data["uncertainties"].append(uncertainty)
 
-    return result.model_copy(update=updates)
+    return GeminiAnalysisOutput.model_validate(data)
 
 
 def _map_provider_error(exc: Exception) -> GeminiServiceError:

@@ -16,6 +16,8 @@ class RetrievedEvidence(BaseModel):
     distance: float
 
     excerpt: str
+    content_hash: str = ""
+    relevance_score: float = Field(default=0.0, ge=0, le=1)
     original_url: str
     document_title: str
     source_version: str
