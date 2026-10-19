@@ -5,6 +5,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.knowledge.embedding.retry import with_embedding_retry
+
 from app.models.knowledge import (
     EvidenceChunk,
     EvidenceDocument,
@@ -27,6 +29,8 @@ def process_chunk(
     db: Session,
     chunk_id: UUID,
     client: GeminiEmbeddingClient,
+    *,
+    allow_test_source: bool = False,
 ) -> EmbeddingResult:
     settings = get_settings()
 
@@ -63,9 +67,18 @@ def process_chunk(
         raise ValueError("Source lacks approved content storage permission")
 
     if source.source_key == "TEST_SOURCE":
+        if not(
+            allow_test_source
+            and settings.APP_ENV  in ("development", "testing")
+        ):
+            raise ValueError(
+                "Synthetic test evidence is excluded from real indexing"
+            )
+    elif source.license == "PERMISSION_REVIEW_REQUIRED":
         raise ValueError(
-            "Synthetic test evidence is excluded from real indexing"
+            "Source permission is not verified"
         )
+    
 
     if (
         chunk.embedding is not None
@@ -77,9 +90,13 @@ def process_chunk(
             chunk.id,
         )
 
-    vector = client.embed_document(
-        content=chunk.content,
-        title=document.title,
+    vector = with_embedding_retry(
+        operation=lambda: client.embed_document(
+            content=chunk.content,
+            title=document.title,
+        ),
+        max_retries=settings.EMBEDDING_MAX_RETRIES,
+        base_delay=settings.EMBEDDING_RETRY_BASE_SECONDS,
     )
 
     chunk.embedding = vector

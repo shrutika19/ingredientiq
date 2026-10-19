@@ -1,0 +1,19 @@
+{
+  "documents": [
+    {
+      "source_key": "TEST_SOURCE",
+      "title": "Synthetic Glycerin Placeholder (Not Approved Evidence)",
+      "original_url": "https://example.org/test/glycerin-approved-placeholder",
+      "source_version": "synthetic-placeholder-v1",
+      "publication_date": null,
+      "retrieved_date": "2026-10-19",
+      "license": "TEST_ONLY",
+      "evidence_type": "scientific_literature",
+      "content": "Dummy placeholder content for glycerin. This is synthetic test data, not scientific evidence, and must not be used for ingredient analysis.",
+      "location_reference": "synthetic-placeholder",
+      "ingredient_names": [
+        "glycerin"
+      ]
+    }
+  ]
+}

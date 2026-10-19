@@ -34,8 +34,11 @@ class GeminiEmbeddingClient:
         content: str,
         title: str,
     ) -> list[float]:
-        if not content.strip():
+        if not isinstance(content, str) or not content.strip():
             raise InvalidEmbeddingError("Empty embedding input")
+
+        if not isinstance(title, str) or not title.strip():
+            raise InvalidEmbeddingError("Empty embedding title")
 
         if len(content) > 4000:
             raise InvalidEmbeddingError(

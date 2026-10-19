@@ -1,10 +1,16 @@
+
 import argparse
 import json
 import logging
 from collections import Counter
 
+import httpx
+
+from app.knowledge.embedding.retry import EmbeddingRetryExhausted
+
 from google.genai.errors import ClientError, ServerError
 from sqlalchemy import or_, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
 from app.database.session import SessionLocal
@@ -19,86 +25,215 @@ from app.models.knowledge import (
     KnowledgeSource,
 )
 
+
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, default=20)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s: %(message)s",
+    )
+
+    settings = get_settings()
+
+    parser = argparse.ArgumentParser(
+        description="Generate embeddings for eligible evidence chunks."
+    )
+
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum chunks to process (default: 20)",
+    )
+
+    parser.add_argument(
+        "--include-test-source",
+        action="store_true",
+        help="Process only TEST_SOURCE chunks in development/testing",
+    )
+
     args = parser.parse_args()
 
     if args.limit < 1:
         parser.error("--limit must be positive")
 
-    settings = get_settings()
+    if args.include_test_source and settings.APP_ENV not in (
+        "development",
+        "testing",
+    ):
+        parser.error(
+            "--include-test-source is forbidden outside "
+            "development/testing"
+        )
+
     counts = Counter()
 
-    with SessionLocal() as db:
-        chunk_ids = db.scalars(
-            select(EvidenceChunk.id)
-            .join(
-                EvidenceDocument,
-                EvidenceChunk.document_id == EvidenceDocument.id,
+    # STEP 1: Fetch eligible chunk IDs.
+    try:
+        with SessionLocal() as db:
+            query = (
+                select(EvidenceChunk.id)
+                .join(
+                    EvidenceDocument,
+                    EvidenceChunk.document_id == EvidenceDocument.id,
+                )
+                .join(
+                    KnowledgeSource,
+                    EvidenceDocument.source_id == KnowledgeSource.id,
+                )
+                .where(
+                    EvidenceChunk.is_active.is_(True),
+                    EvidenceDocument.is_active.is_(True),
+                    KnowledgeSource.is_active.is_(True),
+                    KnowledgeSource.full_text_storage_allowed.is_(True),
+                    or_(
+                        EvidenceChunk.embedding.is_(None),
+                        EvidenceChunk.embedding_model
+                        != settings.EMBEDDING_MODEL,
+                    ),
+                )
             )
-            .join(
-                KnowledgeSource,
-                EvidenceDocument.source_id == KnowledgeSource.id,
-            )
-            .where(
-                EvidenceChunk.is_active.is_(True),
-                EvidenceDocument.is_active.is_(True),
-                KnowledgeSource.is_active.is_(True),
-                KnowledgeSource.full_text_storage_allowed.is_(True),
-                KnowledgeSource.source_key != "TEST_SOURCE",
-                or_(
-                    EvidenceChunk.embedding.is_(None),
-                    EvidenceChunk.embedding_model
-                    != settings.EMBEDDING_MODEL,
-                ),
-            )
-            .order_by(
-                EvidenceChunk.document_id,
-                EvidenceChunk.chunk_index,
-            )
-            .limit(args.limit)
-        ).all()
 
-    if chunk_ids:
+            if args.include_test_source:
+                query = query.where(
+                    KnowledgeSource.source_key == "TEST_SOURCE"
+                )
+            else:
+                query = query.where(
+                    KnowledgeSource.source_key != "TEST_SOURCE",
+                    KnowledgeSource.license
+                    != "PERMISSION_REVIEW_REQUIRED",
+                )
+
+            query = (
+                query.order_by(
+                    EvidenceChunk.document_id,
+                    EvidenceChunk.chunk_index,
+                )
+                .limit(args.limit)
+            )
+
+            chunk_ids = list(db.scalars(query).all())
+
+    except SQLAlchemyError:
+        logger.error("Failed to fetch evidence chunks due to a database error")
+        raise SystemExit(1)
+
+    logger.info(
+        "Found %s eligible evidence chunks",
+        len(chunk_ids),
+    )
+
+    if not chunk_ids:
+        logger.info("No eligible chunks found for embedding")
+
+        print(
+            json.dumps(
+                {
+                    "embedded": 0,
+                    "skipped": 0,
+                    "failed": 0,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    # STEP 2: Initialize embedding client.
+    try:
         client = GeminiEmbeddingClient()
+    except (EmbeddingError, ValueError) as exc:
+        logger.error(
+            "Failed to initialize embedding client: %s",
+            exc,
+        )
+        raise SystemExit(1)
 
-        for chunk_id in chunk_ids:
-            try:
-                with SessionLocal() as db:
-                    with db.begin():
-                        result = process_chunk(db, chunk_id, client)
-
-                counts[result.status] += 1
-
-            except ClientError as exc:
-                counts["failed"] += 1
-                logger.error(
-                    "Gemini client error for chunk %s: %s",
-                    chunk_id, exc,
-                )
-
-                if exc.code == 429:
-                    logger.error(
-                        "Embedding quota exceeded; stopping batch"
+    # STEP 3: Process each chunk in its own transaction.
+    for chunk_id in chunk_ids:
+        try:
+            with SessionLocal() as db:
+                with db.begin():
+                    result = process_chunk(
+                        db,
+                        chunk_id,
+                        client,
+                        allow_test_source=args.include_test_source,
                     )
-                    break
 
-            except (ServerError, EmbeddingError, ValueError) as exc:
-                counts["failed"] += 1
+            counts[result.status] += 1
+
+            logger.info(
+                "Chunk %s: %s",
+                chunk_id,
+                result.status,
+            )
+
+        except EmbeddingRetryExhausted as exc:
+            counts["failed"] += 1
+            logger.error(
+                "Embedding retries exhausted for chunk %s: %s",
+                chunk_id,
+                exc,
+            )
+
+            # Stop this batch to avoid further quota pressure.
+            break
+
+        except ClientError as exc:
+            counts["failed"] += 1
+
+            logger.error(
+                "Gemini client error for chunk %s (status %s)",
+                chunk_id,
+                exc.code,
+            )
+
+            if exc.code == 429:
                 logger.error(
-                    "Embedding failed for chunk %s: %s",
-                    chunk_id, exc,
+                    "Embedding quota exceeded; stopping batch"
                 )
+                break
 
-    print(json.dumps({
+        except SQLAlchemyError:
+            counts["failed"] += 1
+
+            logger.error(
+                "Database error while embedding chunk %s",
+                chunk_id,
+            )
+
+        except httpx.TransportError:
+            counts["failed"] += 1
+            logger.error(
+                "Transport error while embedding chunk %s",
+                chunk_id,
+            )
+
+        except (ServerError, EmbeddingError, ValueError):
+            counts["failed"] += 1
+            logger.error(
+                "Embedding failed for chunk %s",
+                chunk_id,
+            )
+
+        except Exception:
+            counts["failed"] += 1
+            logger.error(
+                "Unexpected error while embedding chunk %s",
+                chunk_id,
+            )
+
+    # STEP 4: Print batch summary.
+    summary = {
         "embedded": counts["embedded"],
         "skipped": counts["skipped"],
         "failed": counts["failed"],
-    }, indent=2))
+    }
+
+    print(json.dumps(summary, indent=2))
 
     if counts["failed"]:
         raise SystemExit(1)
