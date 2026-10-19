@@ -227,6 +227,7 @@ def retrieve_ingredient_evidence(
                 relevance_score=similarity,
                 distance=float(raw_distance),
                 excerpt=chunk.content,
+                content_hash=chunk.content_hash,
                 original_url=document.original_url,
                 document_title=document.title,
                 source_version=document.source_version,

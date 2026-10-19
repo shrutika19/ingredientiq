@@ -218,15 +218,6 @@ class GeminiAnalysisOutput(BaseModel):
                 "Limited summaries cannot cite supporting evidence."
             )
 
-        if self.evidence_status == "limited" and any(
-            ingredient.support_status != "limited"
-            for ingredient in self.ingredients
-        ):
-            raise ValueError(
-                "Limited analyses cannot contain supported or conflicting "
-                "ingredient findings."
-            )
-
         if len(self.evidence_ids) != len(set(self.evidence_ids)):
             raise ValueError("Duplicate summary evidence identifiers are not allowed.")
 

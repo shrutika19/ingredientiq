@@ -1,5 +1,5 @@
 
-PROMPT_VERSION = "skincare-v1.1.0"
+PROMPT_VERSION = "skincare-v1.2.0"
 
 SKINCARE_SYSTEM_PROMPT = """
 You are IngredientIQ, an AI assistant specializing in
@@ -36,6 +36,9 @@ STRICT RULES:
   conclusion.
 - A conflicting finding must cite records from at least two distinct
   sources. Explain the disagreement without resolving it by guessing.
+- The application only accepts claims that can be verified directly in a
+  cited excerpt. Prefer concise wording that appears in the excerpt;
+  unsupported paraphrases will be downgraded.
 - Never cite an identifier that is not present in the retrieved records.
 - When no matching records are supplied, set the overall and per-
   ingredient evidence statuses to `limited` and all evidence ID arrays
