@@ -3,10 +3,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from app.schemas.analysis import GeminiAnalysisOutput
+
 from app.knowledge.retrieval.schemas import RetrievedEvidence
+from app.schemas.analysis import GeminiAnalysisOutput
 from app.services import skincare_analysis_service
-from app.services.gemini_exceptions import GeminiInvalidResponseError
 
 
 def test_analysis_uses_json_schema_response_config(monkeypatch):
@@ -72,6 +72,67 @@ def test_analysis_uses_json_schema_response_config(monkeypatch):
     assert config.response_schema is None
     assert config.response_json_schema == (
         GeminiAnalysisOutput.model_json_schema()
+    )
+
+
+def test_unsupported_ingredient_findings_are_downgraded_before_validation(
+    monkeypatch,
+):
+    response_data = {
+        "overall_assessment": "low_concern",
+        "evidence_status": "limited",
+        "evidence_ids": [],
+        "summary": "A limited ingredient overview.",
+        "ingredients": [
+            {
+                "name": name,
+                "function": "Common cosmetic ingredient",
+                "concern_level": "low",
+                "explanation": "This may have cosmetic uses.",
+                "support_status": "supported",
+                "evidence_ids": [],
+            }
+            for name in ("Aqua", "Glycerin", "Niacinamide")
+        ],
+        "cautions": [],
+        "uncertainties": [],
+    }
+
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            return SimpleNamespace(text=json.dumps(response_data))
+
+    class FakeClient:
+        models = FakeModels()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    monkeypatch.setattr(
+        skincare_analysis_service,
+        "get_settings",
+        lambda: SimpleNamespace(GEMINI_MODEL="test-model"),
+    )
+    monkeypatch.setattr(
+        skincare_analysis_service,
+        "create_gemini_client",
+        FakeClient,
+    )
+
+    result = skincare_analysis_service.analyze_skincare_ingredients(
+        "Aqua, Glycerin, Niacinamide"
+    )
+
+    assert result.evidence_status == "limited"
+    assert result.evidence_ids == []
+    assert all(
+        ingredient.support_status == "limited"
+        and ingredient.evidence_ids == []
+        and "not evidence-backed" in ingredient.explanation
+        for ingredient in result.ingredients
     )
 
 
@@ -167,18 +228,18 @@ def test_retrieved_evidence_is_passed_as_untrusted_context(monkeypatch):
     assert result.ingredients[0].evidence_ids == [evidence_id]
 
 
-def test_fabricated_evidence_identifier_is_rejected(monkeypatch):
+def test_fabricated_evidence_identifier_is_removed_and_limited(monkeypatch):
     response_data = {
         "overall_assessment": "low_concern",
         "evidence_status": "source_grounded",
         "evidence_ids": ["fabricated-id"],
-        "summary": "A cited finding.",
+        "summary": "A cited finding. [fabricated-id]",
         "ingredients": [
             {
                 "name": "Glycerin",
                 "function": "Humectant",
                 "concern_level": "low",
-                "explanation": "Supports hydration.",
+                "explanation": "Supports hydration. [fabricated-id]",
                 "support_status": "supported",
                 "evidence_ids": ["fabricated-id"],
             }
@@ -228,14 +289,21 @@ def test_fabricated_evidence_identifier_is_rejected(monkeypatch):
         source_version="v1",
     )
 
-    with pytest.raises(GeminiInvalidResponseError):
-        skincare_analysis_service.analyze_skincare_ingredients(
-            "Glycerin",
-            retrieved_evidence=[evidence],
-            evidence_by_ingredient={
-                "glycerin": [str(evidence.chunk_id)]
-            },
-        )
+    result = skincare_analysis_service.analyze_skincare_ingredients(
+        "Glycerin",
+        retrieved_evidence=[evidence],
+        evidence_by_ingredient={
+            "glycerin": [str(evidence.chunk_id)]
+        },
+    )
+
+    assert result.evidence_status == "limited"
+    assert result.evidence_ids == []
+    assert "fabricated-id" not in result.summary
+    assert result.ingredients[0].support_status == "limited"
+    assert result.ingredients[0].evidence_ids == []
+    assert "fabricated-id" not in result.ingredients[0].explanation
+    assert "not evidence-backed" in result.ingredients[0].explanation
 
 
 def test_model_input_bounds_evidence_snippets_and_excerpt_size():

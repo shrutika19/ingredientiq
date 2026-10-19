@@ -69,18 +69,127 @@ def _validate_input(ingredient_text: str) -> str:
     return value
 
 
+def _remove_citation_markers(value: str) -> str:
+    return re.sub(r"\s*\[[^\]]+\]", "", value).strip()
+
+
+def _normalize_candidate_evidence_statuses(
+    candidate: object,
+) -> object:
+    if not isinstance(candidate, dict):
+        return candidate
+
+    if not isinstance(candidate.get("ingredients"), list):
+        return candidate
+
+    summary_ids = candidate.get("evidence_ids", [])
+    if not isinstance(summary_ids, list):
+        summary_ids = []
+    summary_status = candidate.get("evidence_status", "limited")
+    if (
+        summary_status == "limited" and summary_ids
+    ) or (
+        summary_status == "source_grounded" and not summary_ids
+    ):
+        candidate["evidence_status"] = "limited"
+        candidate["evidence_ids"] = []
+        if isinstance(candidate.get("summary"), str):
+            candidate["summary"] = _remove_citation_markers(
+                candidate["summary"]
+            )
+        logger.warning(
+            "Gemini response normalized: scope=summary "
+            "reason=inconsistent_evidence_status"
+        )
+
+    for ingredient in candidate["ingredients"]:
+        if not isinstance(ingredient, dict):
+            continue
+
+        evidence_ids = ingredient.get("evidence_ids", [])
+        if not isinstance(evidence_ids, list):
+            evidence_ids = []
+        support_status = ingredient.get("support_status", "limited")
+        must_downgrade = (
+            support_status == "supported" and not evidence_ids
+        ) or (
+            support_status == "conflicting" and len(evidence_ids) < 2
+        ) or (
+            support_status == "limited" and evidence_ids
+        )
+        if not must_downgrade:
+            continue
+
+        ingredient["support_status"] = "limited"
+        ingredient["evidence_ids"] = []
+        for field in ("function", "explanation"):
+            value = ingredient.get(field)
+            if isinstance(value, str):
+                ingredient[field] = _remove_citation_markers(value)
+
+        explanation = ingredient.get("explanation")
+        if isinstance(explanation, str):
+            ingredient["explanation"] = (
+                f"{explanation} This finding is not evidence-backed."
+            )
+
+        logger.warning(
+            "Gemini response normalized: scope=ingredient "
+            "reason=inconsistent_evidence_status"
+        )
+
+    return candidate
+
+
 def _parse_response(response) -> GeminiAnalysisOutput:
     try:
         if not response.text:
+            logger.warning(
+                "Gemini response rejected: stage=parse reason=empty_response"
+            )
             raise GeminiInvalidResponseError(
                 "Gemini returned an empty response."
             )
 
+        candidate = json.loads(response.text)
+        candidate = _normalize_candidate_evidence_statuses(candidate)
         return GeminiAnalysisOutput.model_validate_json(
-            response.text
+            json.dumps(candidate)
         )
 
-    except (ValidationError, ValueError, TypeError) as exc:
+    except ValidationError as exc:
+        locations = [
+            ".".join(str(part) for part in error["loc"])
+            for error in exc.errors(
+                include_url=False,
+                include_context=False,
+                include_input=False,
+            )[:5]
+        ]
+        error_types = [
+            error["type"]
+            for error in exc.errors(
+                include_url=False,
+                include_context=False,
+                include_input=False,
+            )[:5]
+        ]
+        logger.warning(
+            "Gemini response rejected: stage=parse "
+            "reason=schema_validation error_count=%d "
+            "locations=%s types=%s",
+            exc.error_count(),
+            locations,
+            error_types,
+        )
+        raise GeminiInvalidResponseError(
+            "Gemini returned an invalid analysis structure."
+        ) from exc
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            "Gemini response rejected: stage=parse reason=%s",
+            type(exc).__name__,
+        )
         raise GeminiInvalidResponseError(
             "Gemini returned an invalid analysis structure."
         ) from exc
@@ -150,22 +259,39 @@ def _validate_evidence_references(
     result: GeminiAnalysisOutput,
     retrieved_evidence: Sequence[RetrievedEvidence],
     evidence_by_ingredient: Mapping[str, Sequence[str]],
-) -> None:
+) -> GeminiAnalysisOutput:
     records = {
         str(item.chunk_id): item
         for item in retrieved_evidence[:MAX_EVIDENCE_SNIPPETS]
     }
-    cited_ids = set(result.evidence_ids)
-
-    for ingredient in result.ingredients:
-        cited_ids.update(ingredient.evidence_ids)
-
-    if not cited_ids.issubset(records):
-        raise GeminiInvalidResponseError(
-            "Gemini returned an evidence identifier that was not retrieved."
+    data = result.model_dump(mode="python")
+    summary_marker_ids = set(
+        re.findall(r"\[([^\]]+)\]", result.summary)
+    )
+    invalid_summary_ids = (
+        set(result.evidence_ids) | summary_marker_ids
+    ) - set(records)
+    unlisted_summary_ids = summary_marker_ids - set(result.evidence_ids)
+    unreferenced_summary_ids = set(result.evidence_ids) - summary_marker_ids
+    if (
+        invalid_summary_ids
+        or unlisted_summary_ids
+        or unreferenced_summary_ids
+    ):
+        logger.warning(
+            "Gemini citations rejected: scope=summary reason=invalid_or_unlisted_ids "
+            "count=%d",
+            (
+                len(invalid_summary_ids)
+                + len(unlisted_summary_ids)
+                + len(unreferenced_summary_ids)
+            ),
         )
+        data["evidence_status"] = "limited"
+        data["evidence_ids"] = []
+        data["summary"] = _remove_citation_markers(result.summary)
 
-    for ingredient in result.ingredients:
+    for index, ingredient in enumerate(result.ingredients):
         expected_ids = set(
             evidence_by_ingredient.get(
                 normalize_ingredient(ingredient.name),
@@ -173,22 +299,63 @@ def _validate_evidence_references(
             )
         )
         ingredient_ids = set(ingredient.evidence_ids)
+        allowed_ids = expected_ids & set(records)
+        text_marker_ids = set(
+            re.findall(
+                r"\[([^\]]+)\]",
+                f"{ingredient.function} {ingredient.explanation}",
+            )
+        )
+        invalid_ids = (ingredient_ids | text_marker_ids) - allowed_ids
+        unlisted_text_ids = text_marker_ids - ingredient_ids
+        valid_ids = ingredient_ids & allowed_ids
+        conflicting_without_sources = (
+            ingredient.support_status == "conflicting"
+            and len(
+                {
+                    records[evidence_id].source_id
+                    for evidence_id in valid_ids
+                }
+            ) < 2
+        )
 
-        if ingredient_ids and not ingredient_ids.issubset(expected_ids):
-            raise GeminiInvalidResponseError(
-                "Gemini cited evidence for a different ingredient."
+        if invalid_ids or unlisted_text_ids or conflicting_without_sources:
+            reason = (
+                "invalid_or_mismatched_ids"
+                if invalid_ids or unlisted_text_ids
+                else "insufficient_conflicting_sources"
+            )
+            logger.warning(
+                "Gemini citations rejected: scope=ingredient "
+                "reason=%s count=%d",
+                reason,
+                (
+                    len(invalid_ids) + len(unlisted_text_ids)
+                    if invalid_ids or unlisted_text_ids
+                    else len(valid_ids)
+                ),
+            )
+            data["ingredients"][index]["support_status"] = "limited"
+            data["ingredients"][index]["evidence_ids"] = []
+            data["ingredients"][index]["explanation"] = (
+                f"{_remove_citation_markers(ingredient.explanation)} "
+                "Citation validation failed; "
+                "this finding is not evidence-backed."
+            )
+            data["ingredients"][index]["function"] = (
+                _remove_citation_markers(ingredient.function)
             )
 
-        if ingredient.support_status == "conflicting":
-            source_ids = {
-                records[evidence_id].source_id
-                for evidence_id in ingredient_ids
-            }
-            if len(source_ids) < 2:
-                raise GeminiInvalidResponseError(
-                    "Conflicting findings require evidence from "
-                    "multiple retrieved sources."
-                )
+    data["cautions"] = [
+        _remove_citation_markers(value)
+        for value in result.cautions
+    ]
+    data["uncertainties"] = [
+        _remove_citation_markers(value)
+        for value in result.uncertainties
+    ]
+
+    return GeminiAnalysisOutput.model_validate(data)
 
 
 def _apply_evidence_status(
@@ -374,7 +541,7 @@ def analyze_skincare_ingredients(
                     )
 
                     result = _parse_response(response)
-                    _validate_evidence_references(
+                    result = _validate_evidence_references(
                         result,
                         evidence,
                         evidence_index,
