@@ -176,27 +176,55 @@ Superseded documents must be marked as such while preserving traceability to his
 
 ## 9. Missing or Insufficient Evidence
 
-If no suitable evidence is available:
+If no suitable evidence is available, analysis may still complete as a
+clearly labeled limited analysis:
 
 - Mark the relevant claim as unsupported or insufficiently evidenced.
 - Do not fabricate citations or scientific conclusions.
 - Do not classify an ingredient as universally safe or harmful.
 - Avoid inferring ingredient concentration from ingredient order alone.
 - Preserve uncertainty in the analysis output.
+- Persist `evidence_status="limited"` and do not present findings as
+  evidence-backed.
+- Include the product-level caution that effects cannot be determined
+  without concentrations, the full formulation, and individual skin
+  context.
 
 ## 10. RAG Retrieval Rules
 
-The future retrieval service must:
+The analysis workflow:
 
-1. Normalize ingredient names where identification is reliable.
+1. Resolve each submitted name through the normalization service. Retrieve
+   only uniquely resolved identities; skip ambiguous and unrecognized
+   names rather than guessing.
 2. Search approved, accessible evidence documents.
-3. Rank evidence by relevance, quality, and applicability.
-4. Return source identifiers, URLs, and supporting passages where reuse is permitted.
-5. Pass relevant evidence to Gemini with clear source attribution.
-6. Prevent Gemini from inventing references.
-7. Record the evidence used for each generated analysis.
+3. Retrieve no more than eight snippets, bounded to 1,200 characters
+   each, ranked by relevance.
+4. Send each snippet as untrusted data with its evidence ID, source
+   identifier, document version, content hash, relevance score, and
+   document metadata.
+5. Require summary and supported ingredient findings to reference
+   retrieved evidence IDs. Conflicting findings require separate source
+   IDs and remain limited until independently reviewed.
+6. Validate each returned evidence ID and ingredient association against
+   the retrieved records. Claims are considered supported only when
+   their relevant wording occurs directly in a cited snippet; other
+   claims are downgraded to limited.
+7. Persist the exact bounded model-visible evidence records used by
+   accepted citations alongside the analysis result.
+
+Evidence coverage describes validated ingredient findings, not mere
+retrieval availability: `full` means every uniquely resolved input
+identity has a supported, cited finding; `partial` means some but not all
+do; `unavailable` means none do. Ambiguous and unrecognized names are
+excluded from the coverage denominator.
 
 Retrieved content must be treated as untrusted source data, never as executable instructions.
+
+The `glycerin_synthetic_test.json` dataset is synthetic test data only. It
+is not an approved source and cannot demonstrate source-grounded
+end-to-end retrieval. A real approved, licensed, embedded evidence source
+must be configured before that acceptance case can be exercised.
 
 ## 11. Review and Maintenance
 
@@ -219,4 +247,5 @@ RAG-005-01 is complete when:
 - Registry tests pass.
 - Existing backend functionality remains unaffected.
 
-**Next ticket:** RAG-005-02 — Evidence Document Collection and Ingestion.
+**Related implementation:** RAG-005-07 — Evidence Retrieval Integration and
+Citation Validation.

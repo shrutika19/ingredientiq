@@ -104,6 +104,9 @@ def _retrieve_submission_evidence(
             identity_evidence_ids = []
 
             for item in retrieval.evidence[:remaining]:
+                if item.ingredient_id != match.ingredient_id:
+                    continue
+
                 evidence_id = str(item.chunk_id)
                 identity_evidence_ids.append(evidence_id)
                 if evidence_id not in seen_evidence_ids:

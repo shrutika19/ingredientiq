@@ -196,6 +196,11 @@ def test_retrieval_context_is_bounded_to_eight_snippets(monkeypatch):
             )
         ],
     )
+    ingredient_ids = {
+        match.original_name: match.ingredient_id
+        for match in normalization.ingredients
+        if match.ingredient_id is not None
+    }
 
     monkeypatch.setattr(
         analysis_workflow_service,
@@ -211,7 +216,7 @@ def test_retrieval_context_is_bounded_to_eight_snippets(monkeypatch):
                 source_id=uuid4(),
                 source_key="MOCK_SOURCE",
                 document_id=uuid4(),
-                ingredient_id=uuid4(),
+                ingredient_id=ingredient_ids[ingredient_name],
                 ingredient_name=ingredient_name,
                 relevance_score=0.9,
                 distance=0.1,
@@ -327,6 +332,67 @@ def test_only_uniquely_resolved_ingredients_are_retrieved(monkeypatch):
     assert evidence == [retrieved]
     assert set(evidence_map) == {"glycerin"}
     assert actual_normalization is normalization
+
+
+def test_retrieved_evidence_for_wrong_ingredient_is_excluded(monkeypatch):
+    submission_id = uuid4()
+    ingredient_id = uuid4()
+    wrong_ingredient_id = uuid4()
+    normalization = NormalizationResult(
+        submission_id=submission_id,
+        original_text="Glycerin",
+        ingredients=[
+            IngredientMatch(
+                position=0,
+                original_name="Glycerin",
+                normalized_name="glycerin",
+                status=ResolutionStatus.RESOLVED,
+                ingredient_id=ingredient_id,
+                canonical_name="Glycerin",
+                match_type="canonical",
+            )
+        ],
+    )
+    mismatched_evidence = RetrievedEvidence(
+        chunk_id=uuid4(),
+        source_id=uuid4(),
+        source_key="MOCK_SOURCE",
+        document_id=uuid4(),
+        ingredient_id=wrong_ingredient_id,
+        ingredient_name="Other Ingredient",
+        relevance_score=0.9,
+        distance=0.1,
+        excerpt="Evidence for another ingredient.",
+        original_url="https://example.org/evidence",
+        document_title="Evidence",
+        source_version="v1",
+    )
+
+    monkeypatch.setattr(
+        analysis_workflow_service,
+        "normalize_submission",
+        lambda db, requested_id: normalization,
+    )
+    monkeypatch.setattr(
+        analysis_workflow_service,
+        "retrieve_ingredient_evidence",
+        lambda **kwargs: IngredientRetrievalResult(
+            ingredient="Glycerin",
+            normalized_ingredient="glycerin",
+            status="found",
+            evidence=[mismatched_evidence],
+        ),
+    )
+
+    evidence, evidence_by_ingredient, _ = (
+        analysis_workflow_service._retrieve_submission_evidence(
+            object(),
+            submission_id,
+        )
+    )
+
+    assert evidence == []
+    assert evidence_by_ingredient == {"glycerin": []}
 
 
 def test_evidence_coverage_distinguishes_partial_and_unavailable():
