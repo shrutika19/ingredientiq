@@ -1,5 +1,6 @@
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -78,6 +79,10 @@ def mark_completed(
     db: Session,
     analysis_id: UUID,
     result: GeminiAnalysisOutput,
+    *,
+    evidence_references: list[dict[str, Any]] | None = None,
+    evidence_coverage: str = "unavailable",
+    retrieval_config: dict[str, Any] | None = None,
 ) -> IngredientAnalysis:
     analysis = db.get(IngredientAnalysis, analysis_id)
 
@@ -87,6 +92,9 @@ def mark_completed(
         )
 
     analysis.result = result.model_dump(mode="json")
+    analysis.evidence_references = evidence_references or []
+    analysis.evidence_coverage = evidence_coverage
+    analysis.retrieval_config = retrieval_config or {}
     analysis.status = AnalysisStatus.COMPLETED
     analysis.completed_at = datetime.now(timezone.utc)
     analysis.failure_code = None

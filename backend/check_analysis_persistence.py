@@ -37,6 +37,8 @@ def main():
         # Synthetic test result, not a real Gemini response.
         result = GeminiAnalysisOutput.model_validate({
             "overall_assessment": "low_concern",
+            "evidence_status": "limited",
+            "evidence_ids": [],
             "summary": "Example moisturizing ingredient.",
             "ingredients": [
                 {
@@ -44,6 +46,8 @@ def main():
                     "function": "Humectant",
                     "concern_level": "low",
                     "explanation": "Helps retain moisture.",
+                    "support_status": "limited",
+                    "evidence_ids": [],
                 }
             ],
             "cautions": [],

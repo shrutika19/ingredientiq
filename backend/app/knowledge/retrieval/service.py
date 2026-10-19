@@ -57,7 +57,7 @@ def resolve_ingredient(
 def retrieve_ingredient_evidence(
     db: Session,
     ingredient_name: str,
-    embedding_client: GeminiEmbeddingClient,
+    embedding_client: GeminiEmbeddingClient | None = None,
     *,
     top_k: int | None = None,
     min_similarity: float | None = None,
@@ -132,6 +132,9 @@ def retrieve_ingredient_evidence(
             status="no_evidence",
             evidence=[],
         )
+
+    if embedding_client is None:
+        embedding_client = GeminiEmbeddingClient()
 
     query_vector = embedding_client.embed_query(
         f"Scientific cosmetic ingredient evidence about "

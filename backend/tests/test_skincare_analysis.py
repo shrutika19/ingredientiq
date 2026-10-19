@@ -21,6 +21,8 @@ from app.schemas.analysis import GeminiAnalysisOutput
 
 VALID_OUTPUT = {
     "overall_assessment": "low_concern",
+    "evidence_status": "limited",
+    "evidence_ids": [],
     "summary": "Contains common moisturizing ingredients.",
     "ingredients": [
         {
@@ -28,6 +30,8 @@ VALID_OUTPUT = {
             "function": "Humectant",
             "concern_level": "low",
             "explanation": "Helps retain moisture.",
+            "support_status": "limited",
+            "evidence_ids": [],
         }
     ],
     "cautions": [],

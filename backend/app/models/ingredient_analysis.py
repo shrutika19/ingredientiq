@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -68,6 +69,27 @@ class IngredientAnalysis(Base):
     prompt_version: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
+    )
+
+    evidence_references: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+
+    evidence_coverage: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="unavailable",
+        server_default="unavailable",
+    )
+
+    retrieval_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
     )
 
     failure_code: Mapped[str | None] = mapped_column(

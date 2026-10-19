@@ -9,6 +9,8 @@ from app.schemas.analysis import GeminiAnalysisOutput
 def valid_analysis():
     return {
         "overall_assessment": "low_concern",
+        "evidence_status": "limited",
+        "evidence_ids": [],
         "summary": "Mostly common moisturizing ingredients.",
         "ingredients": [
             {
@@ -16,6 +18,8 @@ def valid_analysis():
                 "function": "Humectant",
                 "concern_level": "low",
                 "explanation": "Helps retain moisture.",
+                "support_status": "limited",
+                "evidence_ids": [],
             }
         ],
         "cautions": [],
@@ -46,6 +50,8 @@ def test_duplicate_ingredients_rejected(valid_analysis):
         "function": "Humectant",
         "concern_level": "low",
         "explanation": "Moisturizing ingredient.",
+        "support_status": "limited",
+        "evidence_ids": [],
     })
 
     with pytest.raises(ValidationError):
@@ -65,6 +71,8 @@ def test_unknown_ingredient(valid_analysis):
         "function": "Unknown",
         "concern_level": "unknown",
         "explanation": "Insufficient evidence is available.",
+        "support_status": "limited",
+        "evidence_ids": [],
     }]
     valid_analysis["overall_assessment"] = "insufficient_data"
 
@@ -94,6 +102,8 @@ def test_unknown_ingredient_accepts_evidence_limitation_phrasing(
             "function": "Unknown",
             "concern_level": "unknown",
             "explanation": explanation,
+            "support_status": "limited",
+            "evidence_ids": [],
         }
     ]
     valid_analysis["overall_assessment"] = "insufficient_data"
@@ -112,6 +122,8 @@ def test_unknown_ingredient_rejects_explanation_without_uncertainty(
             "function": "Unknown",
             "concern_level": "unknown",
             "explanation": "A moisturizing ingredient used in creams.",
+            "support_status": "limited",
+            "evidence_ids": [],
         }
     ]
     valid_analysis["overall_assessment"] = "insufficient_data"
