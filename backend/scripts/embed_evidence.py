@@ -4,6 +4,10 @@ import json
 import logging
 from collections import Counter
 
+import httpx
+
+from app.knowledge.embedding.retry import EmbeddingRetryExhausted
+
 from google.genai.errors import ClientError, ServerError
 from sqlalchemy import or_, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -114,7 +118,7 @@ def main() -> None:
             chunk_ids = list(db.scalars(query).all())
 
     except SQLAlchemyError:
-        logger.exception("Failed to fetch evidence chunks")
+        logger.error("Failed to fetch evidence chunks due to a database error")
         raise SystemExit(1)
 
     logger.info(
@@ -167,13 +171,24 @@ def main() -> None:
                 result.status,
             )
 
+        except EmbeddingRetryExhausted as exc:
+            counts["failed"] += 1
+            logger.error(
+                "Embedding retries exhausted for chunk %s: %s",
+                chunk_id,
+                exc,
+            )
+
+            # Stop this batch to avoid further quota pressure.
+            break
+
         except ClientError as exc:
             counts["failed"] += 1
 
             logger.error(
-                "Gemini client error for chunk %s: %s",
+                "Gemini client error for chunk %s (status %s)",
                 chunk_id,
-                exc,
+                exc.code,
             )
 
             if exc.code == 429:
@@ -182,23 +197,31 @@ def main() -> None:
                 )
                 break
 
-        except (
-            ServerError,
-            EmbeddingError,
-            ValueError,
-            SQLAlchemyError,
-        ) as exc:
+        except SQLAlchemyError:
             counts["failed"] += 1
 
             logger.error(
-                "Embedding failed for chunk %s: %s",
+                "Database error while embedding chunk %s",
                 chunk_id,
-                exc,
+            )
+
+        except httpx.TransportError:
+            counts["failed"] += 1
+            logger.error(
+                "Transport error while embedding chunk %s",
+                chunk_id,
+            )
+
+        except (ServerError, EmbeddingError, ValueError):
+            counts["failed"] += 1
+            logger.error(
+                "Embedding failed for chunk %s",
+                chunk_id,
             )
 
         except Exception:
             counts["failed"] += 1
-            logger.exception(
+            logger.error(
                 "Unexpected error while embedding chunk %s",
                 chunk_id,
             )

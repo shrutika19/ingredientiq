@@ -5,6 +5,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.knowledge.embedding.retry import with_embedding_retry
+
 from app.models.knowledge import (
     EvidenceChunk,
     EvidenceDocument,
@@ -88,9 +90,13 @@ def process_chunk(
             chunk.id,
         )
 
-    vector = client.embed_document(
-        content=chunk.content,
-        title=document.title,
+    vector = with_embedding_retry(
+        operation=lambda: client.embed_document(
+            content=chunk.content,
+            title=document.title,
+        ),
+        max_retries=settings.EMBEDDING_MAX_RETRIES,
+        base_delay=settings.EMBEDDING_RETRY_BASE_SECONDS,
     )
 
     chunk.embedding = vector

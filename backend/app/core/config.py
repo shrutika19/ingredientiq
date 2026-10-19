@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSIONS: int = Field(default=768, ge=1)
     EMBEDDING_TIMEOUT_SECONDS: int = Field(default=30, ge=1, le=120)
     EMBEDDING_MAX_RETRIES: int = Field(default=3, ge=1, le=5)
+    EMBEDDING_RETRY_BASE_SECONDS: float = Field(default=2.0, ge=0.1, le=30.0)
     CHUNK_MAX_WORDS: int = Field(default=180, ge=30, le=400)
 
     model_config = SettingsConfigDict(
