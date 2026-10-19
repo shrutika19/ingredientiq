@@ -39,6 +39,18 @@ class Settings(BaseSettings):
     EMBEDDING_MAX_RETRIES: int = Field(default=3, ge=1, le=5)
     EMBEDDING_RETRY_BASE_SECONDS: float = Field(default=2.0, ge=0.1, le=30.0)
     CHUNK_MAX_WORDS: int = Field(default=180, ge=30, le=400)
+    # RAG retrieval configuration
+    RETRIEVAL_TOP_K: int = Field(default=5, ge=1, le=20)
+    RETRIEVAL_MIN_SIMILARITY: float = Field(
+        default=0.65,
+        ge=0.0,
+        le=1.0,
+    )
+    RETRIEVAL_CANDIDATE_MULTIPLIER: int = Field(
+        default=4,
+        ge=1,
+        le=10,
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
