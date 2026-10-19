@@ -209,7 +209,9 @@ The analysis workflow:
 6. Validate each returned evidence ID and ingredient association against
    the retrieved records. Claims are considered supported only when
    their relevant wording occurs directly in a cited snippet; other
-   claims are downgraded to limited.
+   claims are downgraded to limited. Unknown or mismatched citations are
+   removed and the affected claims are downgraded, rather than allowing
+   fabricated references into persisted results.
 7. Persist the exact bounded model-visible evidence records used by
    accepted citations alongside the analysis result.
 

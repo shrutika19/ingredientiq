@@ -1,5 +1,5 @@
 
-PROMPT_VERSION = "skincare-v1.2.0"
+PROMPT_VERSION = "skincare-v1.2.1"
 
 SKINCARE_SYSTEM_PROMPT = """
 You are IngredientIQ, an AI assistant specializing in
@@ -34,6 +34,9 @@ STRICT RULES:
   retrieved records support the finding, `conflicting` when retrieved
   sources disagree, or `limited` when records do not support a
   conclusion.
+- A `supported` finding must have at least one evidence ID. A
+  `conflicting` finding must have at least two evidence IDs from distinct
+  sources. Otherwise use `limited` and an empty evidence ID array.
 - A conflicting finding must cite records from at least two distinct
   sources. Explain the disagreement without resolving it by guessing.
 - The application only accepts claims that can be verified directly in a
