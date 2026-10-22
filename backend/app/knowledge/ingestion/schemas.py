@@ -36,4 +36,31 @@ class SeedDocument(BaseModel):
             raise ValueError(
                 "Publication date cannot exceed retrieval date"
             )
+
+        placeholder_markers = (
+            "replace with",
+            "verified_license_or_permission_id",
+            "verified document title",
+            "verified section or page",
+            "example.org/replace-with",
+        )
+        candidate_fields = {
+            "title": self.title,
+            "original_url": str(self.original_url),
+            "source_version": self.source_version,
+            "license": self.license,
+            "content": self.content or "",
+            "location_reference": self.location_reference or "",
+        }
+        placeholder_fields = [
+            field
+            for field, value in candidate_fields.items()
+            if any(marker in value.casefold() for marker in placeholder_markers)
+        ]
+        if placeholder_fields:
+            raise ValueError(
+                "Dataset contains unresolved placeholder values in: "
+                + ", ".join(placeholder_fields)
+            )
+
         return self

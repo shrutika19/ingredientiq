@@ -109,6 +109,51 @@ def _normalize_candidate_evidence_statuses(
         evidence_ids = ingredient.get("evidence_ids", [])
         if not isinstance(evidence_ids, list):
             evidence_ids = []
+        if (
+            isinstance(ingredient.get("function"), str)
+            and ingredient["function"].strip().casefold() == "unknown"
+        ):
+            ingredient["concern_level"] = "unknown"
+
+        if ingredient.get("concern_level") == "unknown":
+            if (
+                ingredient.get("support_status") != "limited"
+                or evidence_ids
+            ):
+                ingredient["support_status"] = "limited"
+                ingredient["evidence_ids"] = []
+                evidence_ids = []
+                logger.warning(
+                    "Gemini response normalized: scope=ingredient "
+                    "reason=unknown_finding_cannot_be_supported"
+                )
+
+            explanation = ingredient.get("explanation")
+            if isinstance(explanation, str):
+                normalized_explanation = explanation.casefold()
+                uncertainty_terms = (
+                    "unknown",
+                    "uncertain",
+                    "insufficient",
+                    "cannot determine",
+                    "cannot be established",
+                    "unverified",
+                    "not established",
+                    "not documented",
+                    "limited evidence",
+                    "limited information",
+                    "lack of evidence",
+                )
+                if not any(
+                    term in normalized_explanation
+                    for term in uncertainty_terms
+                ):
+                    ingredient["explanation"] = (
+                        f"{explanation.rstrip()} "
+                        "Available evidence is insufficient to assess "
+                        "this ingredient."
+                    )
+
         support_status = ingredient.get("support_status", "limited")
         must_downgrade = (
             support_status == "supported" and not evidence_ids
@@ -137,6 +182,18 @@ def _normalize_candidate_evidence_statuses(
             "Gemini response normalized: scope=ingredient "
             "reason=inconsistent_evidence_status"
         )
+
+    if candidate["ingredients"] and all(
+        isinstance(ingredient, dict)
+        and ingredient.get("concern_level") == "unknown"
+        for ingredient in candidate["ingredients"]
+    ):
+        if candidate.get("overall_assessment") != "insufficient_data":
+            candidate["overall_assessment"] = "insufficient_data"
+            logger.warning(
+                "Gemini response normalized: scope=analysis "
+                "reason=all_findings_unknown"
+            )
 
     return candidate
 

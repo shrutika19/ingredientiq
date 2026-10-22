@@ -58,7 +58,7 @@ class FakeSession:
 def make_source(
     *,
     full_text_storage_allowed=False,
-    license="Not verified for proposed reuse",
+    license="CC BY 4.0",
 ):
     return SimpleNamespace(
         id=uuid4(),
@@ -72,7 +72,7 @@ def make_source(
 def make_item(
     *,
     content=None,
-    license="Not verified for proposed reuse",
+    license="CC BY 4.0",
 ):
     return SeedDocument(
         source_key="EU_COSING",
@@ -164,7 +164,7 @@ def test_unverified_license_rejects_content_even_if_storage_is_enabled():
 
     with pytest.raises(
         IngestionRejected,
-        match="Cannot store content while source permission is unverified",
+        match="Source permission is not verified",
     ):
         ingest_document(
             db,
@@ -175,6 +175,24 @@ def test_unverified_license_rejects_content_even_if_storage_is_enabled():
         )
 
     assert db.added == []
+
+
+def test_known_unverified_license_allows_metadata_only_ingestion():
+    license = "PERMISSION_REVIEW_REQUIRED"
+    db = FakeSession(
+        make_source(
+            full_text_storage_allowed=False,
+            license=license,
+        )
+    )
+
+    result = ingest_document(db, make_item(license=license))
+
+    assert result.status == "ingested"
+    assert not any(
+        isinstance(item, EvidenceChunk)
+        for item in db.added
+    )
 
 
 def test_existing_document_with_incomplete_chunks_is_rejected():

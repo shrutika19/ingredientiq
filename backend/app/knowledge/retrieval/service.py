@@ -1,7 +1,7 @@
 import re
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from difflib import SequenceMatcher
 
@@ -18,6 +18,12 @@ from app.models.knowledge import (
     IngredientAlias,
     IngredientIdentity,
     KnowledgeSource,
+)
+from app.knowledge.sources import UNVERIFIED_LICENSE_VALUES
+
+
+_UNVERIFIED_LICENSE_VALUES_NORMALIZED = tuple(
+    value.casefold() for value in UNVERIFIED_LICENSE_VALUES
 )
 
 
@@ -117,8 +123,9 @@ def retrieve_ingredient_evidence(
             KnowledgeSource.is_active.is_(True),
             KnowledgeSource.full_text_storage_allowed.is_(True),
             KnowledgeSource.source_key != "TEST_SOURCE",
-            KnowledgeSource.license != "TEST_ONLY",
-            KnowledgeSource.license != "PERMISSION_REVIEW_REQUIRED",
+            func.lower(KnowledgeSource.license).notin_(
+                _UNVERIFIED_LICENSE_VALUES_NORMALIZED
+            ),
             EvidenceChunk.embedding.is_not(None),
             EvidenceChunk.embedding_model == settings.EMBEDDING_MODEL,
         )
@@ -177,8 +184,9 @@ def retrieve_ingredient_evidence(
             KnowledgeSource.is_active.is_(True),
             KnowledgeSource.full_text_storage_allowed.is_(True),
             KnowledgeSource.source_key != "TEST_SOURCE",
-            KnowledgeSource.license != "TEST_ONLY",
-            KnowledgeSource.license != "PERMISSION_REVIEW_REQUIRED",
+            func.lower(KnowledgeSource.license).notin_(
+                _UNVERIFIED_LICENSE_VALUES_NORMALIZED
+            ),
             EvidenceChunk.embedding.is_not(None),
             EvidenceChunk.embedding_model == settings.EMBEDDING_MODEL,
         )
