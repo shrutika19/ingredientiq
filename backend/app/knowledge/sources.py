@@ -4,6 +4,25 @@ from datetime import date
 from enum import Enum
 
 
+UNVERIFIED_LICENSE_VALUES = frozenset(
+    {
+        "PERMISSION_REVIEW_REQUIRED",
+        "TEST_ONLY",
+        "VERIFIED_LICENSE_OR_PERMISSION_ID",
+        "Not verified for proposed reuse",
+        "Verify per opinion",
+        "Varies by article",
+    }
+)
+_UNVERIFIED_LICENSE_VALUES_NORMALIZED = frozenset(
+    value.casefold() for value in UNVERIFIED_LICENSE_VALUES
+)
+
+
+def is_known_unverified_license(value: str) -> bool:
+    return value.strip().casefold() in _UNVERIFIED_LICENSE_VALUES_NORMALIZED
+
+
 class EvidenceTier(str, Enum):
     OFFICIAL = "official_regulatory_assessment"
     SCIENTIFIC = "scientific_review"

@@ -152,6 +152,10 @@ Before ingestion, ingredient identities, INCI names, synonyms, and applicable di
 - Recheck licensing when a document or publisher changes.
 
 Unverified permission must block full-text ingestion by default.
+Known review-required and template license values are also excluded from
+embedding and retrieval, even if a database row was incorrectly marked as
+approved. Evidence dataset placeholders such as `REPLACE WITH` or
+`VERIFIED_LICENSE_OR_PERMISSION_ID` are rejected during validation.
 
 ## 7. Conflicting Evidence
 
@@ -225,7 +229,8 @@ Retrieved content must be treated as untrusted source data, never as executable 
 
 The `glycerin_synthetic_test.json` dataset is synthetic test data only. It
 is not an approved source and cannot demonstrate source-grounded
-end-to-end retrieval. A real approved, licensed, embedded evidence source
+end-to-end retrieval. No reviewed, licensed Glycerin evidence dataset is
+currently provided. A real approved, licensed, embedded evidence source
 must be configured before that acceptance case can be exercised.
 
 ## 11. Review and Maintenance

@@ -15,6 +15,7 @@ from app.models.knowledge import (
 from app.knowledge.embedding.client import (
     GeminiEmbeddingClient,
 )
+from app.knowledge.sources import is_known_unverified_license
 from app.core.config import get_settings
 
 
@@ -74,7 +75,7 @@ def process_chunk(
             raise ValueError(
                 "Synthetic test evidence is excluded from real indexing"
             )
-    elif source.license == "PERMISSION_REVIEW_REQUIRED":
+    elif is_known_unverified_license(source.license):
         raise ValueError(
             "Source permission is not verified"
         )

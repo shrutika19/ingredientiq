@@ -136,6 +136,67 @@ def test_unsupported_ingredient_findings_are_downgraded_before_validation(
     )
 
 
+def test_unknown_ingredient_findings_get_conservative_explanations(
+    monkeypatch,
+):
+    response_data = {
+        "overall_assessment": "low_concern",
+        "evidence_status": "limited",
+        "evidence_ids": [],
+        "summary": "An ingredient overview.",
+        "ingredients": [
+            {
+                "name": name,
+                "function": "Unknown",
+                "concern_level": "unknown",
+                "explanation": "No detailed assessment was returned.",
+                "support_status": "supported",
+                "evidence_ids": [],
+            }
+            for name in ("Aqua", "Glycerin", "Niacinamide")
+        ],
+        "cautions": [],
+        "uncertainties": [],
+    }
+
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            return SimpleNamespace(text=json.dumps(response_data))
+
+    class FakeClient:
+        models = FakeModels()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    monkeypatch.setattr(
+        skincare_analysis_service,
+        "get_settings",
+        lambda: SimpleNamespace(GEMINI_MODEL="test-model"),
+    )
+    monkeypatch.setattr(
+        skincare_analysis_service,
+        "create_gemini_client",
+        FakeClient,
+    )
+
+    result = skincare_analysis_service.analyze_skincare_ingredients(
+        "Aqua, Glycerin, Niacinamide"
+    )
+
+    assert result.overall_assessment == "insufficient_data"
+    assert all(
+        ingredient.concern_level == "unknown"
+        and ingredient.support_status == "limited"
+        and ingredient.evidence_ids == []
+        and "insufficient" in ingredient.explanation.casefold()
+        for ingredient in result.ingredients
+    )
+
+
 def test_retrieved_evidence_is_passed_as_untrusted_context(monkeypatch):
     evidence = RetrievedEvidence(
         chunk_id=uuid4(),
@@ -304,6 +365,107 @@ def test_fabricated_evidence_identifier_is_removed_and_limited(monkeypatch):
     assert result.ingredients[0].evidence_ids == []
     assert "fabricated-id" not in result.ingredients[0].explanation
     assert "not evidence-backed" in result.ingredients[0].explanation
+
+
+def test_cross_ingredient_evidence_identifier_is_removed(monkeypatch):
+    glycerin_evidence = RetrievedEvidence(
+        chunk_id=uuid4(),
+        source_id=uuid4(),
+        source_key="EXAMPLE_SOURCE",
+        document_id=uuid4(),
+        ingredient_id=uuid4(),
+        ingredient_name="Glycerin",
+        relevance_score=0.9,
+        distance=0.1,
+        excerpt="Glycerin is a humectant and supports hydration.",
+        original_url="https://example.org/glycerin",
+        document_title="Glycerin reference",
+        source_version="v1",
+    )
+    niacinamide_evidence = RetrievedEvidence(
+        chunk_id=uuid4(),
+        source_id=uuid4(),
+        source_key="EXAMPLE_SOURCE",
+        document_id=uuid4(),
+        ingredient_id=uuid4(),
+        ingredient_name="Niacinamide",
+        relevance_score=0.9,
+        distance=0.1,
+        excerpt="Niacinamide is a skin-conditioning agent.",
+        original_url="https://example.org/niacinamide",
+        document_title="Niacinamide reference",
+        source_version="v1",
+    )
+    glycerin_id = str(glycerin_evidence.chunk_id)
+    niacinamide_id = str(niacinamide_evidence.chunk_id)
+    response_data = {
+        "overall_assessment": "low_concern",
+        "evidence_status": "limited",
+        "evidence_ids": [],
+        "summary": "Limited analysis.",
+        "ingredients": [
+            {
+                "name": "Glycerin",
+                "function": "Humectant",
+                "concern_level": "low",
+                "explanation": "Glycerin supports hydration.",
+                "support_status": "supported",
+                "evidence_ids": [niacinamide_id],
+            },
+            {
+                "name": "Niacinamide",
+                "function": "Unknown",
+                "concern_level": "unknown",
+                "explanation": "Insufficient information is available.",
+                "support_status": "limited",
+                "evidence_ids": [],
+            },
+        ],
+        "cautions": [],
+        "uncertainties": [],
+    }
+
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            return SimpleNamespace(text=json.dumps(response_data))
+
+    class FakeClient:
+        models = FakeModels()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    monkeypatch.setattr(
+        skincare_analysis_service,
+        "get_settings",
+        lambda: SimpleNamespace(GEMINI_MODEL="test-model"),
+    )
+    monkeypatch.setattr(
+        skincare_analysis_service,
+        "create_gemini_client",
+        FakeClient,
+    )
+
+    result = skincare_analysis_service.analyze_skincare_ingredients(
+        "Glycerin, Niacinamide",
+        retrieved_evidence=[
+            glycerin_evidence,
+            niacinamide_evidence,
+        ],
+        evidence_by_ingredient={
+            "glycerin": [glycerin_id],
+            "niacinamide": [niacinamide_id],
+        },
+    )
+
+    glycerin = result.ingredients[0]
+    assert glycerin.support_status == "limited"
+    assert glycerin.evidence_ids == []
+    assert niacinamide_id not in glycerin.explanation
+    assert "not evidence-backed" in glycerin.explanation
 
 
 def test_model_input_bounds_evidence_snippets_and_excerpt_size():

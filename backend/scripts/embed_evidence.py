@@ -9,7 +9,7 @@ import httpx
 from app.knowledge.embedding.retry import EmbeddingRetryExhausted
 
 from google.genai.errors import ClientError, ServerError
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
@@ -19,6 +19,7 @@ from app.knowledge.embedding.client import (
     GeminiEmbeddingClient,
 )
 from app.knowledge.embedding.service import process_chunk
+from app.knowledge.sources import UNVERIFIED_LICENSE_VALUES
 from app.models.knowledge import (
     EvidenceChunk,
     EvidenceDocument,
@@ -27,6 +28,9 @@ from app.models.knowledge import (
 
 
 logger = logging.getLogger(__name__)
+_UNVERIFIED_LICENSE_VALUES_NORMALIZED = tuple(
+    value.casefold() for value in UNVERIFIED_LICENSE_VALUES
+)
 
 
 def main() -> None:
@@ -103,8 +107,9 @@ def main() -> None:
             else:
                 query = query.where(
                     KnowledgeSource.source_key != "TEST_SOURCE",
-                    KnowledgeSource.license
-                    != "PERMISSION_REVIEW_REQUIRED",
+                    func.lower(KnowledgeSource.license).notin_(
+                        _UNVERIFIED_LICENSE_VALUES_NORMALIZED
+                    ),
                 )
 
             query = (

@@ -11,6 +11,7 @@ from app.knowledge.ingestion.normalizer import (
     normalize_content,
 )
 from app.knowledge.ingestion.schemas import SeedDocument
+from app.knowledge.sources import is_known_unverified_license
 from app.models.knowledge import (
     KnowledgeSource,
     IngredientIdentity,
@@ -51,17 +52,17 @@ def ingest_document(
             "Source is not approved for content storage"
         )
 
+    if (
+        item.content is not None
+        and is_known_unverified_license(source.license)
+    ):
+        raise IngestionRejected(
+            "Source permission is not verified"
+        )
+
     if item.license != source.license:
         raise IngestionRejected(
             "Document license differs from approved source license"
-        )
-
-    if (
-        item.content is not None
-        and source.license == "PERMISSION_REVIEW_REQUIRED"
-    ):
-        raise IngestionRejected(
-            "Cannot store content while source permission is unverified"
         )
 
     if item.content is None:
