@@ -135,6 +135,8 @@ The gateway is published on port `8000` by default (`GATEWAY_PORT` changes it). 
 
 The Nginx gateway limits request bodies to 64 KiB and allows up to 150 seconds for upstream responses. It adds `X-Content-Type-Options: nosniff` and HSTS headers. Terminate HTTPS at the public edge in production; HSTS is effective only when delivered over HTTPS. The frontend sets a Content Security Policy and allows API connections only to its own origin and the origin configured by `VITE_API_BASE_URL`.
 
+The API writes structured JSON logs to stdout. Each HTTP request receives an `X-Request-ID` response header; a valid UUID supplied in the `X-Request-ID` request header is retained, otherwise the API generates one. Request logs include method, path, status, and duration, but never request bodies.
+
 CI runs `pip-audit` against backend runtime dependencies, `npm audit` against the frontend lockfile, and Gitleaks for committed secrets. Dependabot checks GitHub Actions, Python, and npm dependencies weekly.
 
 When running the API outside the provided Compose network, leave `TRUSTED_PROXY_IPS` empty unless it is behind a trusted reverse proxy. If a proxy is used, configure the API to trust only that proxy's IP/CIDR and configure it to overwrite `X-Real-IP` with the actual client address. Do not expose the API container directly to the public internet or trust arbitrary forwarded headers. Configure HTTPS termination at the public edge in production. If a separate load balancer or TLS proxy sits in front of Nginx, configure Nginx's real-IP module to trust only that upstream's IP/CIDR; otherwise Nginx will see and rate-limit the upstream proxy's address.

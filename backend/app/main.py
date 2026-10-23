@@ -6,14 +6,17 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.router import api_router
 from app.core.config import get_settings
-
 from app.core.exceptions import (
-    validation_exception_handler,
     database_exception_handler,
     global_exception_handler,
     http_exception_handler,
+    validation_exception_handler,
 )
+from app.core.logging_config import configure_logging
+from app.core.request_logging import RequestLoggingMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+configure_logging()
 
 settings = get_settings()
 
@@ -30,8 +33,11 @@ app.add_middleware(
     allow_origins=settings.FRONTEND_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
+
+app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(
     api_router,
