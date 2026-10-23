@@ -23,6 +23,7 @@ class AnalysisEvidenceReference(BaseModel):
     evidence_id: UUID
     source_id: UUID
     source_identifier: str
+    source_organization: str | None = None
     document_id: UUID
     document_version: str
     chunk_id: UUID

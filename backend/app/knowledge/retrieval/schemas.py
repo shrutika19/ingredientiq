@@ -7,6 +7,7 @@ class RetrievedEvidence(BaseModel):
     chunk_id: UUID
     source_id: UUID
     source_key: str
+    source_organization: str | None = None
     document_id: UUID
 
     ingredient_id: UUID

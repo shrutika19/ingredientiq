@@ -234,6 +234,7 @@ def retrieve_ingredient_evidence(
                 chunk_id=chunk.id,
                 source_id=source.id,
                 source_key=source.source_key,
+                source_organization=source.organization,
                 document_id=document.id,
                 ingredient_id=ingredient.id,
                 ingredient_name=ingredient.canonical_name,

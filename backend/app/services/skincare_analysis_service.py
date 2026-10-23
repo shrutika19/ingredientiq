@@ -274,6 +274,7 @@ def build_evidence_context_records(
         {
             "evidence_id": str(item.chunk_id),
             "source_identifier": item.source_key,
+            "source_organization": item.source_organization,
             "source_id": str(item.source_id),
             "document_id": str(item.document_id),
             "document_version": item.source_version,
