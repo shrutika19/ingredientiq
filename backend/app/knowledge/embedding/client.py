@@ -1,10 +1,21 @@
 
 import math
+from functools import lru_cache
 
 from google import genai
 from google.genai import types
 
 from app.core.config import get_settings
+
+
+@lru_cache(maxsize=512)
+def _cached_query_embedding(
+    model: str,
+    dimensions: int,
+    query: str,
+) -> tuple[float, ...]:
+    client = GeminiEmbeddingClient()
+    return tuple(client.embed_query(query))
 
 
 class EmbeddingError(Exception):
@@ -13,6 +24,20 @@ class EmbeddingError(Exception):
 
 class InvalidEmbeddingError(EmbeddingError):
     pass
+
+
+def embed_cached_query(query: str) -> list[float]:
+    if not isinstance(query, str) or not query.strip():
+        raise InvalidEmbeddingError("Empty retrieval query")
+
+    settings = get_settings()
+    return list(
+        _cached_query_embedding(
+            settings.EMBEDDING_MODEL,
+            settings.EMBEDDING_DIMENSIONS,
+            query.strip(),
+        )
+    )
 
 
 class GeminiEmbeddingClient:

@@ -36,12 +36,23 @@ def test_valid_analysis(valid_analysis):
 
 def test_whitespace_is_trimmed(valid_analysis):
     valid_analysis["ingredients"][0]["name"] = " Glycerin "
+    valid_analysis["ingredients"][0]["supporting_quote"] = (
+        "  verbatim quote  "
+    )
 
     result = GeminiAnalysisOutput.model_validate(
         valid_analysis
     )
 
     assert result.ingredients[0].name == "Glycerin"
+    assert result.ingredients[0].supporting_quote == "verbatim quote"
+
+
+def test_supporting_quote_is_bounded(valid_analysis):
+    valid_analysis["ingredients"][0]["supporting_quote"] = "q" * 501
+
+    with pytest.raises(ValidationError):
+        GeminiAnalysisOutput.model_validate(valid_analysis)
 
 
 def test_duplicate_ingredients_rejected(valid_analysis):

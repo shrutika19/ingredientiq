@@ -4,6 +4,7 @@ import {
   AnalysisApiError,
   getIngredientAnalysis,
   startIngredientAnalysis,
+  waitForIngredientAnalysis,
 } from '../../api/analysis'
 import { SubmissionApiError, submitIngredients } from '../../api/submissions'
 import type { IngredientAnalysisResponse } from '../../types/analysis'
@@ -99,8 +100,15 @@ function IngredientAnalyzer() {
     setAnalysisRetryAction('analyze')
 
     try {
-      const result = await startIngredientAnalysis(submissionId)
+      const queued = await startIngredientAnalysis(submissionId)
+      setAnalysisRetryAction('retrieve')
+      const result = await waitForIngredientAnalysis(
+        submissionId,
+        queued,
+        setAnalysis,
+      )
       setAnalysis(result)
+      setAnalysisRetryAction(result.status === 'FAILED' ? 'analyze' : 'retrieve')
     } catch (error) {
       const message = getAnalysisErrorMessage(error)
       setAnalysisError(message)
@@ -122,7 +130,15 @@ function IngredientAnalyzer() {
     setAnalysisRetryAction('retrieve')
 
     try {
-      const result = await getIngredientAnalysis(submissionId)
+      const initial = await getIngredientAnalysis(submissionId)
+      const result =
+        initial.status === 'PENDING' || initial.status === 'PROCESSING'
+          ? await waitForIngredientAnalysis(
+              submissionId,
+              initial,
+              setAnalysis,
+            )
+          : initial
       setAnalysis(result)
       setAnalysisRetryAction(result.status === 'FAILED' ? 'analyze' : 'retrieve')
       if (result.status === 'PROCESSING' || result.status === 'PENDING') {

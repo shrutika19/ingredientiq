@@ -1,5 +1,5 @@
 
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -48,21 +48,27 @@ class AnalyzedIngredient(BaseModel):
     concern_level: ConcernLevel
     explanation: str = Field(min_length=1)
     support_status: FindingSupport = "limited"
+    supporting_quote: str | None = Field(
+        default=None,
+        max_length=500,
+    )
     evidence_ids: list[str] = Field(default_factory=list)
 
     @field_validator(
         "name",
         "function",
         "explanation",
+        "supporting_quote",
     )
     @classmethod
-    def validate_text(cls, value: str) -> str:
+    def validate_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
         value = value.strip()
 
         if not value:
-            raise ValueError(
-                "Ingredient text fields cannot be empty."
-            )
+            raise ValueError("Ingredient text fields cannot be empty.")
 
         return value
 
@@ -169,6 +175,43 @@ class GeminiAnalysisOutput(BaseModel):
 
     cautions: list[str]
     uncertainties: list[str]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_result(cls, value: Any) -> Any:
+        if (
+            not isinstance(value, dict)
+            or "evidence_status" in value
+        ):
+            return value
+
+        normalized = dict(value)
+        normalized["evidence_status"] = "limited"
+        normalized["evidence_ids"] = []
+        normalized["summary"] = (
+            "Limited analysis: this result predates evidence "
+            "validation and is not source-grounded. "
+            f"{normalized['summary']}"
+        )
+        normalized["ingredients"] = [
+            {
+                **ingredient,
+                "support_status": "limited",
+                "supporting_quote": None,
+                "evidence_ids": [],
+            }
+            for ingredient in normalized["ingredients"]
+        ]
+        cautions = list(normalized["cautions"])
+        product_caution = (
+            "Product-level effects cannot be determined without "
+            "concentrations, full formulation, and individual "
+            "skin context."
+        )
+        if product_caution not in cautions:
+            cautions.append(product_caution)
+        normalized["cautions"] = cautions
+        return normalized
 
     @field_validator("summary")
     @classmethod

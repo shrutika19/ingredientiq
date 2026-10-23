@@ -1,10 +1,10 @@
 
 from functools import lru_cache
+from ipaddress import ip_network
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import SecretStr
 
 class Settings(BaseSettings):
     # Application configuration
@@ -15,6 +15,13 @@ class Settings(BaseSettings):
 
     # Frontend configuration
     FRONTEND_ORIGINS: list[str] = Field(default_factory=list)
+
+    # API abuse protection
+    API_REQUESTS_PER_MINUTE: int = Field(default=10, ge=1)
+    API_DAILY_ANALYSES_PER_IP: int = Field(default=5, ge=1)
+    API_DAILY_SUBMISSIONS_PER_IP: int = Field(default=100, ge=1)
+    API_LIMIT_HASH_SECRET: SecretStr | None = None
+    TRUSTED_PROXY_IPS: list[str] = Field(default_factory=list)
 
     # Database configuration
     DB_HOST: str
@@ -67,11 +74,30 @@ class Settings(BaseSettings):
             )
 
         if self.APP_ENV == "production":
+            if (
+                self.API_LIMIT_HASH_SECRET is None
+                or len(
+                    self.API_LIMIT_HASH_SECRET.get_secret_value().strip()
+                ) < 32
+            ):
+                raise ValueError(
+                    "API_LIMIT_HASH_SECRET must contain at least 32 "
+                    "characters in production"
+                )
+
             for origin in self.FRONTEND_ORIGINS:
                 if not origin.startswith("https://"):
                     raise ValueError(
                         "Production frontend origins must use HTTPS"
                     )
+
+        for proxy_ip in self.TRUSTED_PROXY_IPS:
+            try:
+                ip_network(proxy_ip, strict=False)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid trusted proxy IP or network: {proxy_ip}"
+                ) from exc
 
         return self
 

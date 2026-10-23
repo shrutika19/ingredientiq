@@ -6,7 +6,10 @@ from sqlalchemy.orm import Session
 from difflib import SequenceMatcher
 
 from app.core.config import get_settings
-from app.knowledge.embedding.client import GeminiEmbeddingClient
+from app.knowledge.embedding.client import (
+    GeminiEmbeddingClient,
+    embed_cached_query,
+)
 from app.knowledge.retrieval.schemas import (
     IngredientRetrievalResult,
     RetrievedEvidence,
@@ -140,13 +143,15 @@ def retrieve_ingredient_evidence(
             evidence=[],
         )
 
-    if embedding_client is None:
-        embedding_client = GeminiEmbeddingClient()
-
-    query_vector = embedding_client.embed_query(
+    query = (
         f"Scientific cosmetic ingredient evidence about "
         f"{ingredient.canonical_name}: skin function, "
         f"benefits, limitations and safety."
+    )
+    query_vector = (
+        embedding_client.embed_query(query)
+        if embedding_client is not None
+        else embed_cached_query(query)
     )
 
     distance = EvidenceChunk.embedding.cosine_distance(

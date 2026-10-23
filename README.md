@@ -11,12 +11,14 @@ IngredientIQ helps people understand skincare product ingredient lists. The Reac
 - Gemini-powered ingredient analysis, including an overall assessment, ingredient functions, cautions, and uncertainties.
 - Persisted analysis results that can be reopened through the submission URL.
 - FastAPI health and database readiness endpoints.
+- Nginx API gateway with per-IP request throttling and PostgreSQL-backed daily analysis quotas.
 
 
 ## Project structure
 
 ```text
 backend/
+  Dockerfile
   app/
     api/          API routes
     core/         Configuration and exception handlers
@@ -28,6 +30,10 @@ backend/
   tests/
   alembic.ini
   requirements.txt
+  requirements-dev.txt
+gateway/
+  nginx.conf       Nginx reverse proxy and edge rate limits
+docker-compose.yml  API and gateway deployment
 frontend/
   src/
     api/          Backend API clients
@@ -53,8 +59,10 @@ cd backend
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
+
+`requirements.txt` contains runtime dependencies; `requirements-dev.txt` adds the test tools used for local development.
 
 Copy `backend/.env.example` to `backend/.env` and set the PostgreSQL connection values and Gemini key:
 
@@ -74,16 +82,64 @@ GEMINI_MODEL=your_available_gemini_model
 GEMINI_TIMEOUT_SECONDS=30
 ```
 
-Create the configured PostgreSQL database and user before starting the API. Keep real credentials in local environment files or a secret manager; do not commit them.
+Configure a dedicated migration role separately from the runtime role. The migration role owns the application schema and applies DDL; the API runtime role should have only connection, schema usage, table DML, and sequence usage privileges. For a new database, the role setup can follow this pattern (replace the example passwords and database name):
+
+```sql
+CREATE ROLE ingredientiq_migrator LOGIN PASSWORD 'distinct-migration-password';
+CREATE ROLE ingredientiq_runtime LOGIN PASSWORD 'runtime-password';
+CREATE DATABASE ingredientiq_db OWNER ingredientiq_migrator;
+\connect ingredientiq_db
+GRANT CONNECT ON DATABASE ingredientiq_db TO ingredientiq_runtime;
+GRANT USAGE ON SCHEMA public TO ingredientiq_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ingredientiq_runtime;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ingredientiq_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE ingredientiq_migrator IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ingredientiq_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE ingredientiq_migrator IN SCHEMA public
+  GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ingredientiq_runtime;
+```
+
+Ensure the `vector` extension is available to the migration role. Do not reuse migration credentials in the API runtime.
+
+For local migrations, temporarily override `DB_USER` and `DB_PASSWORD` in the shell with the migration role credentials before running Alembic. For any database host other than `localhost` or a loopback IP, the API and migrations use PostgreSQL `sslmode=require`; local loopback connections use SSL disabled.
 
 Apply migrations and start the backend from the `backend` directory:
 
 ```powershell
+$env:DB_USER = "ingredientiq_migrator"
+$env:DB_PASSWORD = "your_migration_password"
 alembic upgrade head
+Remove-Item Env:DB_USER, Env:DB_PASSWORD
 uvicorn app.main:app --reload
 ```
 
 The API will be available at `http://localhost:8000`. Interactive API documentation is at `http://localhost:8000/docs` when the app is not running in production mode.
+
+### API gateway, rate limits, and daily quota
+
+For a containerized deployment, copy the root `.env.example` to `.env` and `migration.env.example` to `migration.env`. Set the runtime database credentials in `.env`, the distinct migration-role credentials in `migration.env`, and configure the Gemini key, frontend origin, and a random `API_LIMIT_HASH_SECRET` (at least 32 characters). Then apply migrations using the dedicated migration service and start the API behind the Nginx gateway:
+
+```powershell
+Copy-Item .env.example .env
+Copy-Item migration.env.example migration.env
+docker compose build
+docker compose run --rm migrate
+docker compose up -d
+```
+
+The migration service layers the private `migration.env` over `.env` to replace only the database username and password. The API receives only `.env` and runs with the restricted runtime role. Both roles connect using `sslmode=require` for non-loopback database hosts; ensure your PostgreSQL server supports TLS.
+
+The gateway is published on port `8000` by default (`GATEWAY_PORT` changes it). Only the gateway publishes a host port; the API container is reachable on the private Compose network. Point the frontend's `VITE_API_BASE_URL` at the gateway origin. The configured PostgreSQL service must be reachable from the API container; for Docker Desktop, `host.docker.internal` can reach a database running on the host.
+
+`POST /api/v1/submissions` and `POST /api/v1/submissions/{submission_id}/analyze` are limited to 10 requests per IP per minute at both Nginx and the API. Submissions are additionally capped at 100 per IP per UTC day (`API_DAILY_SUBMISSIONS_PER_IP`); analysis attempts remain capped at 5 per IP per UTC day (`API_DAILY_ANALYSES_PER_IP`). Submission and analysis quotas count requests before processing, including failed requests and analyses for invalid submission IDs. The counters are atomic and stored in PostgreSQL, so they are shared across API workers and survive restarts. IPv4 clients are keyed by individual address; IPv6 clients are grouped by /64 network, preventing address rotation within a subnet from bypassing the daily caps. Client network keys are stored only as keyed hashes; keep `API_LIMIT_HASH_SECRET` stable across replicas and deployments. Clients sharing a public/NAT IPv4 address or IPv6 /64 share its quota. API-generated `429 Too Many Requests` responses include a `Retry-After` header; Nginx also rejects excess traffic at the gateway with HTTP 429.
+
+The Nginx gateway limits request bodies to 64 KiB and allows up to 150 seconds for upstream responses. It adds `X-Content-Type-Options: nosniff` and HSTS headers. Terminate HTTPS at the public edge in production; HSTS is effective only when delivered over HTTPS. The frontend sets a Content Security Policy and allows API connections only to its own origin and the origin configured by `VITE_API_BASE_URL`.
+
+The API writes structured JSON logs to stdout. Each HTTP request receives an `X-Request-ID` response header; a valid UUID supplied in the `X-Request-ID` request header is retained, otherwise the API generates one. Request logs include method, path, status, and duration, but never request bodies.
+
+CI runs `pip-audit` against backend runtime dependencies, `npm audit` against the frontend lockfile, and Gitleaks for committed secrets. Dependabot checks GitHub Actions, Python, and npm dependencies weekly.
+
+When running the API outside the provided Compose network, leave `TRUSTED_PROXY_IPS` empty unless it is behind a trusted reverse proxy. If a proxy is used, configure the API to trust only that proxy's IP/CIDR and configure it to overwrite `X-Real-IP` with the actual client address. Do not expose the API container directly to the public internet or trust arbitrary forwarded headers. Configure HTTPS termination at the public edge in production. If a separate load balancer or TLS proxy sits in front of Nginx, configure Nginx's real-IP module to trust only that upstream's IP/CIDR; otherwise Nginx will see and rate-limit the upstream proxy's address.
 
 ### 2. Configure and start the frontend
 
@@ -108,9 +164,9 @@ All API endpoints are prefixed with `/api/v1`.
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Check that the API is running. |
-| `GET` | `/health/ready` | Check API and database readiness. |
+| `GET` | `/health/ready` | Check database connectivity and that Alembic migrations are at head. |
 | `POST` | `/submissions` | Save ingredient text and return a submission ID. |
-| `POST` | `/submissions/{submission_id}/analyze` | Analyze a saved submission using the backend Gemini service. |
+| `POST` | `/submissions/{submission_id}/analyze` | Queue analysis and return `202 Accepted` with its pending analysis ID. |
 | `GET` | `/submissions/{submission_id}/analysis` | Retrieve the latest saved analysis for a submission. |
 
 Example submission body:
@@ -122,6 +178,14 @@ Example submission body:
 ```
 
 Ingredient text must contain 3–10,000 characters. The analysis request is made by the backend; the browser never receives or uses the Gemini API key.
+
+API errors use a consistent envelope: `{"error":{"code":"...","message":"..."}}`. Readiness returns HTTP 503 when the database is unavailable or its Alembic revision does not match the code's current migration head.
+
+Analysis requests are processed in a FastAPI background task using a separate database session. The response is returned immediately with `202 Accepted`; clients can poll the `Location` URL (or the `GET` endpoint above) until the status becomes `COMPLETED` or `FAILED`. Background tasks are in-process and are not durable across API process crashes; stale active analyses are failed by the existing retry-time sweep, while a dedicated worker queue remains a future scaling step.
+
+Retrieval caches successful canonical-ingredient query embeddings in a bounded per-process LRU cache (512 entries, keyed by embedding model, dimensions, and query text), reducing repeated embedding API calls for common ingredients. Evidence context is bounded to 20 snippets, with one top-ranked snippet requested per resolved ingredient, allowing evidence retrieval to cover up to 20 ingredients per analysis while keeping prompt size bounded. Each API process has its own embedding cache.
+
+For supported ingredient findings, the model returns a short verbatim `supporting_quote`; the API verifies that quote appears in a cited evidence excerpt. The explanation may paraphrase the excerpt. Findings without a matching quote are downgraded to limited support.
 
 ## Tests and checks
 

@@ -8,9 +8,11 @@ from app.models.ingredient_analysis import AnalysisStatus
 from app.schemas.analysis import GeminiAnalysisOutput
 from app.services.analysis_persistence_service import (
     InvalidAnalysisStateError,
+    fail_stale_active_analyses,
     mark_completed,
     mark_failed,
 )
+from sqlalchemy.dialects import postgresql
 
 
 def _analysis_result():
@@ -128,3 +130,33 @@ def test_completed_analysis_cannot_be_overwritten_by_failure():
         mark_failed(FakeDb(), uuid4(), "GEMINI_UNAVAILABLE")
 
     assert completed.result == {"summary": "Saved result."}
+
+
+def test_stale_active_analyses_are_marked_failed():
+    class FakeDb:
+        statement = None
+
+        def execute(self, statement):
+            self.statement = statement
+            return SimpleNamespace(rowcount=2)
+
+        def commit(self):
+            self.committed = True
+
+    db = FakeDb()
+
+    count = fail_stale_active_analyses(db)
+
+    sql = str(db.statement.compile(dialect=postgresql.dialect()))
+    assert count == 2
+    assert "UPDATE ingredient_analyses" in sql
+    assert "created_at" in sql
+    assert "PENDING" in str(db.statement.compile(
+        dialect=postgresql.dialect(),
+        compile_kwargs={"literal_binds": True},
+    ))
+    assert "PROCESSING" in str(db.statement.compile(
+        dialect=postgresql.dialect(),
+        compile_kwargs={"literal_binds": True},
+    ))
+    assert db.committed

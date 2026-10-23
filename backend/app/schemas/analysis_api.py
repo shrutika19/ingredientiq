@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.analysis import GeminiAnalysisOutput
+from app.schemas.error import ErrorResponse
 
 
 class AnalysisApiStatus(str, Enum):
@@ -66,6 +67,5 @@ class AnalysisApiResponse(BaseModel):
         return self
 
 
-class AnalysisErrorResponse(BaseModel):
-    error: str
-    message: str
+class AnalysisErrorResponse(ErrorResponse):
+    pass
