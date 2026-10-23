@@ -20,7 +20,18 @@ export default defineConfig(({ mode }) => {
       {
         name: "frontend-content-security-policy",
         transformIndexHtml(html: string) {
-          return html.replace("__API_ORIGIN__", apiUrl.origin);
+          const withApiOrigin = html.replace(
+            "__API_ORIGIN__",
+            apiUrl.origin,
+          );
+          if (mode !== "development") {
+            return withApiOrigin;
+          }
+
+          return withApiOrigin.replace(
+            /\s*<meta\s+http-equiv="Content-Security-Policy"[\s\S]*?\/>/i,
+            "",
+          );
         },
       },
     ],
