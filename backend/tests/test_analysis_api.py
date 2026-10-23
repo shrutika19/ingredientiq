@@ -119,6 +119,7 @@ def test_saved_evidence_snapshot_is_returned_by_api():
         "evidence_id": uuid4(),
         "source_id": uuid4(),
         "source_identifier": "APPROVED_SOURCE",
+        "source_organization": "Example Research Institute",
         "document_id": uuid4(),
         "document_version": "v7",
         "chunk_id": uuid4(),
@@ -167,4 +168,7 @@ def test_saved_evidence_snapshot_is_returned_by_api():
     assert response.evidence_references[0].document_version == "v7"
     assert response.evidence_references[0].excerpt == (
         "Glycerin supports hydration."
+    )
+    assert response.evidence_references[0].source_organization == (
+        "Example Research Institute"
     )

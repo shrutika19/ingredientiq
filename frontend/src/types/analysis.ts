@@ -6,6 +6,10 @@ export type AnalysisStatus =
 
 export type ConcernLevel = 'low' | 'moderate' | 'high' | 'unknown'
 
+export type FindingSupport = 'supported' | 'limited' | 'conflicting'
+
+export type EvidenceCoverage = 'full' | 'partial' | 'unavailable'
+
 export type OverallAssessment =
   | 'low_concern'
   | 'moderate_concern'
@@ -17,7 +21,9 @@ export interface AnalyzedIngredient {
   function: string
   concern_level: ConcernLevel
   explanation: string
-  supporting_quote: string | null
+  support_status?: FindingSupport
+  supporting_quote?: string | null
+  evidence_ids?: string[]
 }
 
 export interface GeminiAnalysisResult {
@@ -26,6 +32,19 @@ export interface GeminiAnalysisResult {
   ingredients: AnalyzedIngredient[]
   cautions: string[]
   uncertainties: string[]
+  evidence_status?: 'source_grounded' | 'limited'
+  evidence_ids?: string[]
+}
+
+export interface AnalysisEvidenceReference {
+  evidence_id: string
+  source_identifier: string
+  source_organization?: string | null
+  document_title: string
+  original_url: string
+  excerpt: string
+  ingredient_name: string
+  location_reference?: string | null
 }
 
 export interface IngredientAnalysisResponse {
@@ -33,6 +52,8 @@ export interface IngredientAnalysisResponse {
   submission_id: string
   status: AnalysisStatus
   result: GeminiAnalysisResult | null
+  evidence_references?: AnalysisEvidenceReference[] | null
+  evidence_coverage?: EvidenceCoverage
   failure_code: string | null
   created_at: string
   completed_at: string | null

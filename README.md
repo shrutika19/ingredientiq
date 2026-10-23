@@ -9,7 +9,7 @@ IngredientIQ helps people understand skincare product ingredient lists. The Reac
 - Responsive React, TypeScript, and Tailwind CSS landing page.
 - Ingredient text submission through the backend API.
 - Gemini-powered ingredient analysis, including an overall assessment, ingredient functions, cautions, and uncertainties.
-- Persisted analysis results that can be reopened through the submission URL.
+- Persisted analysis results with evidence coverage and source links that can be reopened through the submission URL.
 - FastAPI health and database readiness endpoints.
 - Nginx API gateway with per-IP request throttling and PostgreSQL-backed daily analysis quotas.
 

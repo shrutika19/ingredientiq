@@ -173,6 +173,7 @@ def test_workflow_retrieves_evidence_before_gemini(monkeypatch):
             "evidence_id": str(evidence_id),
             "source_id": str(evidence.source_id),
             "source_identifier": "MOCK_SOURCE",
+            "source_organization": None,
             "document_id": str(evidence.document_id),
             "document_version": "v1",
             "chunk_id": str(evidence_id),
