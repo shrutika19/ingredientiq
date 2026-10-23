@@ -30,6 +30,7 @@ backend/
   tests/
   alembic.ini
   requirements.txt
+  requirements-dev.txt
 gateway/
   nginx.conf       Nginx reverse proxy and edge rate limits
 docker-compose.yml  API and gateway deployment
@@ -58,8 +59,10 @@ cd backend
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
+
+`requirements.txt` contains runtime dependencies; `requirements-dev.txt` adds the test tools used for local development.
 
 Copy `backend/.env.example` to `backend/.env` and set the PostgreSQL connection values and Gemini key:
 
