@@ -42,7 +42,7 @@ def test_parser_preserves_multiword_names():
 
 
 def test_model_context_is_bounded():
-    evidence = [make_evidence() for _ in range(12)]
+    evidence = [make_evidence() for _ in range(25)]
 
     records = build_evidence_context_records(evidence)
 

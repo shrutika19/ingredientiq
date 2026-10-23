@@ -228,8 +228,11 @@ def test_retrieved_evidence_is_passed_as_untrusted_context(monkeypatch):
                 "name": "Glycerin",
                 "function": "Humectant",
                 "concern_level": "low",
-                "explanation": "Supports hydration.",
+                "explanation": "Helps the skin retain moisture.",
                 "support_status": "supported",
+                "supporting_quote": (
+                    "Glycerin is a humectant and supports hydration."
+                ),
                 "evidence_ids": [evidence_id],
             }
         ],
@@ -287,6 +290,10 @@ def test_retrieved_evidence_is_passed_as_untrusted_context(monkeypatch):
     ]
     assert result.evidence_status == "source_grounded"
     assert result.ingredients[0].evidence_ids == [evidence_id]
+    assert result.ingredients[0].support_status == "supported"
+    assert result.ingredients[0].explanation == (
+        "Helps the skin retain moisture."
+    )
 
 
 def test_fabricated_evidence_identifier_is_removed_and_limited(monkeypatch):
@@ -494,7 +501,7 @@ def test_model_input_bounds_evidence_snippets_and_excerpt_size():
         )
     )
 
-    assert len(model_input["retrieved_evidence"]) == 8
+    assert len(model_input["retrieved_evidence"]) == 10
     assert all(
         len(item["excerpt"]) == 1200
         for item in model_input["retrieved_evidence"]
@@ -549,6 +556,9 @@ def test_valid_citation_with_unrelated_or_contradictory_claim_is_limited(
                 "concern_level": "low",
                 "explanation": explanation,
                 "support_status": "supported",
+                "supporting_quote": (
+                    "Glycerin blocks ultraviolet radiation."
+                ),
                 "evidence_ids": [evidence_id],
             }
         ],
@@ -624,6 +634,9 @@ def test_summary_grounding_is_separate_from_ingredient_support():
                     "concern_level": "low",
                     "explanation": "Supports hydration.",
                     "support_status": "supported",
+                    "supporting_quote": (
+                        "Glycerin is a humectant. Supports hydration."
+                    ),
                     "evidence_ids": [evidence_id],
                 }
             ],

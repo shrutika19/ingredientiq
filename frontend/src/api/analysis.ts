@@ -55,10 +55,20 @@ function getErrorDetails(
   }
 
   const detail = isRecord(payload.detail) ? payload.detail : payload
+  const error = isRecord(detail.error) ? detail.error : undefined
   return {
-    error: typeof detail.error === 'string' ? detail.error : undefined,
+    error:
+      typeof error?.code === 'string'
+        ? error.code
+        : typeof detail.error === 'string'
+          ? detail.error
+          : undefined,
     message:
-      typeof detail.message === 'string' ? detail.message : undefined,
+      typeof error?.message === 'string'
+        ? error.message
+        : typeof detail.message === 'string'
+          ? detail.message
+          : undefined,
   }
 }
 
@@ -112,4 +122,26 @@ export function getIngredientAnalysis(
   return requestAnalysis(
     `${API_BASE_URL}/api/v1/submissions/${encodeURIComponent(submissionId)}/analysis`,
   )
+}
+
+export async function waitForIngredientAnalysis(
+  submissionId: string,
+  initialResponse: IngredientAnalysisResponse,
+  onUpdate: (analysis: IngredientAnalysisResponse) => void,
+): Promise<IngredientAnalysisResponse> {
+  let analysis = initialResponse
+  onUpdate(analysis)
+
+  while (
+    analysis.status === 'PENDING' ||
+    analysis.status === 'PROCESSING'
+  ) {
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 2000)
+    })
+    analysis = await getIngredientAnalysis(submissionId)
+    onUpdate(analysis)
+  }
+
+  return analysis
 }

@@ -39,7 +39,7 @@ BASE_DELAY_SECONDS = 1.0
 MAX_DELAY_SECONDS = 4.0
 
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
-MAX_EVIDENCE_SNIPPETS = 8
+MAX_EVIDENCE_SNIPPETS = 20
 MAX_EVIDENCE_EXCERPT_CHARACTERS = 1200
 PRODUCT_CONTEXT_CAUTION = (
     "Product-level effects cannot be determined without concentrations, "
@@ -312,6 +312,19 @@ def _directly_supported(
     )
 
 
+def _quote_appears_in_evidence(
+    quote: str | None,
+    evidence: Sequence[RetrievedEvidence],
+) -> bool:
+    if quote is None:
+        return False
+
+    return any(
+        quote in item.excerpt[:MAX_EVIDENCE_EXCERPT_CHARACTERS]
+        for item in evidence
+    )
+
+
 def _validate_evidence_references(
     result: GeminiAnalysisOutput,
     retrieved_evidence: Sequence[RetrievedEvidence],
@@ -394,6 +407,7 @@ def _validate_evidence_references(
             )
             data["ingredients"][index]["support_status"] = "limited"
             data["ingredients"][index]["evidence_ids"] = []
+            data["ingredients"][index]["supporting_quote"] = None
             data["ingredients"][index]["explanation"] = (
                 f"{_remove_citation_markers(ingredient.explanation)} "
                 "Citation validation failed; "
@@ -436,26 +450,22 @@ def _apply_evidence_status(
             evidence_by_id[evidence_id]
             for evidence_id in ingredient["evidence_ids"]
         ]
-        claim_texts = (
-            ingredient["function"],
-            ingredient["explanation"],
-        )
-
         if ingredient["support_status"] == "conflicting":
             is_supported = False
         else:
-            is_supported = all(
-                _directly_supported(claim, cited)
-                for claim in claim_texts
+            is_supported = _quote_appears_in_evidence(
+                ingredient["supporting_quote"],
+                cited,
             )
 
         if not is_supported:
             ingredient["support_status"] = "limited"
             ingredient["evidence_ids"] = []
+            ingredient["supporting_quote"] = None
             ingredient["explanation"] = (
-                f"{ingredient['explanation']} This finding could not be "
-                "verified directly against the retrieved text and is not "
-                "evidence-backed."
+                f"{ingredient['explanation']} Its supporting quote could "
+                "not be verified directly against the cited retrieved text "
+                "and it is not evidence-backed."
             )
 
     summary = result.summary

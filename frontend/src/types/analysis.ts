@@ -17,6 +17,7 @@ export interface AnalyzedIngredient {
   function: string
   concern_level: ConcernLevel
   explanation: string
+  supporting_quote: string | null
 }
 
 export interface GeminiAnalysisResult {

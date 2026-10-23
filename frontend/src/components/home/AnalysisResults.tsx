@@ -69,8 +69,9 @@ function AnalysisResults({
   const result = analysis?.result
   const isProcessing =
     isLoading ||
-    analysis?.status === 'PENDING' ||
-    analysis?.status === 'PROCESSING'
+    ((!errorMessage) &&
+      (analysis?.status === 'PENDING' ||
+        analysis?.status === 'PROCESSING'))
 
   return (
     <section

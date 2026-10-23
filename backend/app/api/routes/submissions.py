@@ -8,6 +8,7 @@ from app.schemas.submission import (
     IngredientSubmissionResponse,
 )
 from app.schemas.error import ErrorResponse
+from app.services.api_limits import enforce_submission_limits
 from app.services.submission_service import create_submission
 
 
@@ -21,7 +22,12 @@ router = APIRouter(
     "",
     response_model=IngredientSubmissionResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_submission_limits)],
     responses={
+        429: {
+            "model": ErrorResponse,
+            "description": "Per-IP request limit exceeded",
+        },
         422: {
             "model": ErrorResponse,
             "description": "Invalid ingredient submission payload",

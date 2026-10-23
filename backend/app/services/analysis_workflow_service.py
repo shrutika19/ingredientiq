@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.database.session import SessionLocal
 from app.knowledge.embedding.client import EmbeddingError
 from app.knowledge.normalization.parser import normalize_name
 from app.knowledge.normalization.schemas import (
@@ -25,6 +26,7 @@ from app.schemas.analysis import GeminiAnalysisOutput
 from app.models.ingredient_submission import IngredientSubmission
 from app.services.analysis_persistence_service import (
     create_analysis,
+    fail_stale_active_analyses,
     get_submission_analyses,
     mark_completed,
     mark_failed,
@@ -48,7 +50,7 @@ from app.prompts.skincare_v1 import PROMPT_VERSION
 
 
 logger = logging.getLogger(__name__)
-RETRIEVAL_CONFIG_VERSION = "retrieval-v1.1.0"
+RETRIEVAL_CONFIG_VERSION = "retrieval-v1.2.0"
 
 
 class SubmissionNotFound(Exception):
@@ -92,18 +94,17 @@ def _retrieve_submission_evidence(
             match.ingredient_id
         )
         if identity_evidence_ids is None:
-            remaining = MAX_EVIDENCE_SNIPPETS - len(evidence)
-            if remaining <= 0:
+            if len(evidence) >= MAX_EVIDENCE_SNIPPETS:
                 break
 
             retrieval = retrieve_ingredient_evidence(
                 db=db,
                 ingredient_name=match.canonical_name,
-                top_k=min(2, remaining),
+                top_k=1,
             )
             identity_evidence_ids = []
 
-            for item in retrieval.evidence[:remaining]:
+            for item in retrieval.evidence[:1]:
                 if item.ingredient_id != match.ingredient_id:
                     continue
 
@@ -211,7 +212,7 @@ def _retrieval_config_snapshot() -> dict[str, object]:
         "model_context_version": "evidence-context-v1.0.0",
         "coverage_definition": "validated-supported-identities-v1",
         "embedding_model": settings.EMBEDDING_MODEL,
-        "top_k_per_ingredient": 2,
+        "top_k_per_ingredient": 1,
         "max_evidence_snippets": MAX_EVIDENCE_SNIPPETS,
         "max_excerpt_characters": MAX_EVIDENCE_EXCERPT_CHARACTERS,
         "min_similarity": settings.RETRIEVAL_MIN_SIMILARITY,
@@ -233,10 +234,12 @@ def _failure_details(exc: Exception) -> tuple[str, int]:
     return "ANALYSIS_ERROR", 502
 
 
-def start_analysis(
+def queue_analysis(
     db: Session,
     submission_id: UUID,
 ) -> IngredientAnalysis:
+    fail_stale_active_analyses(db)
+
     submission = db.get(IngredientSubmission, submission_id)
 
     if submission is None:
@@ -270,13 +273,30 @@ def start_analysis(
         db.rollback()
         raise AnalysisAlreadyRunning() from exc
 
-    analysis_id = analysis.id
-    mark_processing(db, analysis_id)
+    return analysis
+
+
+def process_analysis(
+    db: Session,
+    submission_id: UUID,
+    analysis_id: UUID,
+) -> IngredientAnalysis | None:
+    analysis_record = db.get(IngredientAnalysis, analysis_id)
+    if (
+        analysis_record is None
+        or analysis_record.status != AnalysisStatus.PENDING
+    ):
+        return None
 
     try:
+        mark_processing(db, analysis_id)
+        submission = db.get(IngredientSubmission, submission_id)
+        if submission is None:
+            raise SubmissionNotFound()
+
         evidence, evidence_by_ingredient, normalization = (
             _retrieve_submission_evidence(
-            db,
+                db,
                 submission_id,
             )
         )
@@ -350,6 +370,52 @@ def start_analysis(
             code="ANALYSIS_ERROR",
             http_status=502,
         ) from exc
+
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Unexpected ingredient analysis failure: analysis_id=%s",
+            analysis_id,
+        )
+        mark_failed(
+            db=db,
+            analysis_id=analysis_id,
+            failure_code="ANALYSIS_ERROR",
+        )
+        raise
+
+
+def start_analysis(
+    db: Session,
+    submission_id: UUID,
+) -> IngredientAnalysis:
+    analysis = queue_analysis(db, submission_id)
+    processed = process_analysis(db, submission_id, analysis.id)
+    if processed is None:
+        raise AnalysisAlreadyRunning()
+    return processed
+
+
+def run_analysis_background(
+    submission_id: UUID,
+    analysis_id: UUID,
+) -> None:
+    db = SessionLocal()
+    try:
+        process_analysis(db, submission_id, analysis_id)
+    except AnalysisExecutionFailed as exc:
+        logger.warning(
+            "Background ingredient analysis failed: analysis_id=%s code=%s",
+            analysis_id,
+            exc.code,
+        )
+    except Exception:
+        logger.exception(
+            "Background ingredient analysis crashed: analysis_id=%s",
+            analysis_id,
+        )
+    finally:
+        db.close()
 
 
 def get_latest_analysis(

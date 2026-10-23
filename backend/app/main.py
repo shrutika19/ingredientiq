@@ -11,7 +11,9 @@ from app.core.exceptions import (
     validation_exception_handler,
     database_exception_handler,
     global_exception_handler,
+    http_exception_handler,
 )
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 settings = get_settings()
 
@@ -40,6 +42,11 @@ app.include_router(
 app.add_exception_handler(
     RequestValidationError,
     validation_exception_handler,
+)
+
+app.add_exception_handler(
+    StarletteHTTPException,
+    http_exception_handler,
 )
 
 app.add_exception_handler(

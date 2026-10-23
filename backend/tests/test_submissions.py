@@ -11,7 +11,9 @@ from app.api.routes import submissions
 
 
 def fake_db():
-    yield MagicMock()
+    db = MagicMock()
+    db.execute.return_value.one.return_value = (1, 0, 1)
+    yield db
 
 
 def test_submit_ingredients(monkeypatch):
@@ -28,7 +30,10 @@ def test_submit_ingredients(monkeypatch):
     app.dependency_overrides[get_db] = fake_db
 
     try:
-        with TestClient(app) as client:
+        with TestClient(
+            app,
+            client=("127.0.0.1", 50000),
+        ) as client:
             response = client.post(
                 "/api/v1/submissions",
                 json={
@@ -47,14 +52,23 @@ def test_submit_ingredients(monkeypatch):
 
 
 def test_invalid_ingredient_text():
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/v1/submissions",
-            json={"ingredient_text": "   "},
-        )
+    app.dependency_overrides[get_db] = fake_db
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    try:
+        with TestClient(
+            app,
+            client=("127.0.0.1", 50000),
+        ) as client:
+            response = client.post(
+                "/api/v1/submissions",
+                json={"ingredient_text": "   "},
+            )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_database_failure(monkeypatch):
@@ -74,7 +88,10 @@ def test_database_failure(monkeypatch):
     app.dependency_overrides[get_db] = fake_db
 
     try:
-        with TestClient(app) as client:
+        with TestClient(
+            app,
+            client=("127.0.0.1", 50000),
+        ) as client:
             response = client.post(
                 "/api/v1/submissions",
                 json={"ingredient_text": "Aqua, Glycerin"},

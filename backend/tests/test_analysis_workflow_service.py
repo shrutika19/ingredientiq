@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.knowledge.retrieval.schemas import (
     IngredientRetrievalResult,
     RetrievedEvidence,
@@ -10,7 +12,7 @@ from app.knowledge.normalization.schemas import (
     NormalizationResult,
     ResolutionStatus,
 )
-from app.models.ingredient_analysis import AnalysisStatus
+from app.models.ingredient_analysis import AnalysisStatus, IngredientAnalysis
 from app.schemas.analysis import GeminiAnalysisOutput
 from app.services import analysis_workflow_service
 
@@ -46,6 +48,11 @@ def test_workflow_retrieves_evidence_before_gemini(monkeypatch):
 
     class FakeSession:
         def get(self, model, key):
+            if model is IngredientAnalysis:
+                return SimpleNamespace(
+                    id=key,
+                    status=AnalysisStatus.PENDING,
+                )
             return SimpleNamespace(
                 id=key,
                 original_text="Glycerin",
@@ -63,6 +70,11 @@ def test_workflow_retrieves_evidence_before_gemini(monkeypatch):
             RETRIEVAL_MIN_SIMILARITY=0.65,
             RETRIEVAL_CANDIDATE_MULTIPLIER=4,
         ),
+    )
+    monkeypatch.setattr(
+        analysis_workflow_service,
+        "fail_stale_active_analyses",
+        lambda db: 0,
     )
     monkeypatch.setattr(
         analysis_workflow_service,
@@ -175,7 +187,85 @@ def test_workflow_retrieves_evidence_before_gemini(monkeypatch):
     ]
 
 
-def test_retrieval_context_is_bounded_to_eight_snippets(monkeypatch):
+def test_unexpected_analysis_error_marks_analysis_failed_and_reraises(
+    monkeypatch,
+):
+    submission_id = uuid4()
+    analysis_id = uuid4()
+    failures = []
+
+    def raise_unexpected_error():
+        raise KeyError("unexpected retrieval failure")
+
+    class FakeSession:
+        def get(self, model, key):
+            if model is IngredientAnalysis:
+                return SimpleNamespace(
+                    id=key,
+                    status=AnalysisStatus.PENDING,
+                )
+            return SimpleNamespace(
+                id=key,
+                original_text="Glycerin",
+            )
+
+        def query(self, model):
+            class Query:
+                def filter(self, *args, **kwargs):
+                    return self
+
+                def first(self):
+                    return None
+
+            return Query()
+
+        def rollback(self):
+            pass
+
+    monkeypatch.setattr(
+        analysis_workflow_service,
+        "fail_stale_active_analyses",
+        lambda db: 0,
+    )
+    monkeypatch.setattr(
+        analysis_workflow_service,
+        "get_settings",
+        lambda: SimpleNamespace(GEMINI_MODEL="test-model"),
+    )
+    monkeypatch.setattr(
+        analysis_workflow_service,
+        "create_analysis",
+        lambda **kwargs: SimpleNamespace(id=analysis_id),
+    )
+    monkeypatch.setattr(
+        analysis_workflow_service,
+        "mark_processing",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        analysis_workflow_service,
+        "_retrieve_submission_evidence",
+        lambda *args, **kwargs: raise_unexpected_error(),
+    )
+    monkeypatch.setattr(
+        analysis_workflow_service,
+        "mark_failed",
+        lambda **kwargs: failures.append(kwargs),
+    )
+
+    with pytest.raises(KeyError, match="unexpected retrieval failure"):
+        analysis_workflow_service.start_analysis(
+            FakeSession(),
+            submission_id,
+        )
+
+    assert len(failures) == 1
+    assert failures[0]["db"] is not None
+    assert failures[0]["analysis_id"] == analysis_id
+    assert failures[0]["failure_code"] == "ANALYSIS_ERROR"
+
+
+def test_retrieval_evidence_covers_more_than_four_ingredients(monkeypatch):
     retrieval_calls = []
     submission_id = uuid4()
     normalization = NormalizationResult(
@@ -247,10 +337,16 @@ def test_retrieval_context_is_bounded_to_eight_snippets(monkeypatch):
         )
     )
 
-    assert len(evidence) == 8
-    assert len(retrieval_calls) == 4
-    assert all(top_k == 2 for _, top_k in retrieval_calls)
-    assert evidence_by_ingredient
+    assert len(evidence) == 5
+    assert len(retrieval_calls) == 5
+    assert all(top_k == 1 for _, top_k in retrieval_calls)
+    assert set(evidence_by_ingredient) == {
+        "aqua",
+        "glycerin",
+        "niacinamide",
+        "panthenol",
+        "tocopherol",
+    }
 
 
 def test_only_uniquely_resolved_ingredients_are_retrieved(monkeypatch):

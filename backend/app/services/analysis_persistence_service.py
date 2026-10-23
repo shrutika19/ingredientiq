@@ -1,9 +1,9 @@
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models.ingredient_analysis import (
@@ -144,6 +144,32 @@ def mark_failed(
     db.refresh(analysis)
 
     return analysis
+
+
+def fail_stale_active_analyses(
+    db: Session,
+    stale_after: timedelta = timedelta(minutes=3),
+) -> int:
+    cutoff = datetime.now(timezone.utc) - stale_after
+    result = db.execute(
+        update(IngredientAnalysis)
+        .where(
+            IngredientAnalysis.status.in_(
+                [AnalysisStatus.PENDING, AnalysisStatus.PROCESSING]
+            ),
+            IngredientAnalysis.created_at < cutoff,
+        )
+        .values(
+            status=AnalysisStatus.FAILED,
+            result=None,
+            failure_code="ANALYSIS_ERROR",
+            failure_message=ALLOWED_FAILURES["ANALYSIS_ERROR"],
+            completed_at=datetime.now(timezone.utc),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    return result.rowcount or 0
 
 
 def get_analysis(
