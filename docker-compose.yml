@@ -27,6 +27,20 @@ services:
       retries: 3
       start_period: 10s
 
+  migrate:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+      - ./migration.env
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+    command: ["alembic", "upgrade", "head"]
+    networks:
+      - api_internal
+    restart: "no"
+
   gateway:
     image: nginx:stable-alpine
     depends_on:

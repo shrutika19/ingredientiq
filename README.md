@@ -82,12 +82,34 @@ GEMINI_MODEL=your_available_gemini_model
 GEMINI_TIMEOUT_SECONDS=30
 ```
 
-Create the configured PostgreSQL database and user before starting the API. Keep real credentials in local environment files or a secret manager; do not commit them.
+Configure a dedicated migration role separately from the runtime role. The migration role owns the application schema and applies DDL; the API runtime role should have only connection, schema usage, table DML, and sequence usage privileges. For a new database, the role setup can follow this pattern (replace the example passwords and database name):
+
+```sql
+CREATE ROLE ingredientiq_migrator LOGIN PASSWORD 'distinct-migration-password';
+CREATE ROLE ingredientiq_runtime LOGIN PASSWORD 'runtime-password';
+CREATE DATABASE ingredientiq_db OWNER ingredientiq_migrator;
+\connect ingredientiq_db
+GRANT CONNECT ON DATABASE ingredientiq_db TO ingredientiq_runtime;
+GRANT USAGE ON SCHEMA public TO ingredientiq_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ingredientiq_runtime;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ingredientiq_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE ingredientiq_migrator IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ingredientiq_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE ingredientiq_migrator IN SCHEMA public
+  GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ingredientiq_runtime;
+```
+
+Ensure the `vector` extension is available to the migration role. Do not reuse migration credentials in the API runtime.
+
+For local migrations, temporarily override `DB_USER` and `DB_PASSWORD` in the shell with the migration role credentials before running Alembic. For any database host other than `localhost` or a loopback IP, the API and migrations use PostgreSQL `sslmode=require`; local loopback connections use SSL disabled.
 
 Apply migrations and start the backend from the `backend` directory:
 
 ```powershell
+$env:DB_USER = "ingredientiq_migrator"
+$env:DB_PASSWORD = "your_migration_password"
 alembic upgrade head
+Remove-Item Env:DB_USER, Env:DB_PASSWORD
 uvicorn app.main:app --reload
 ```
 
@@ -95,14 +117,17 @@ The API will be available at `http://localhost:8000`. Interactive API documentat
 
 ### API gateway, rate limits, and daily quota
 
-For a containerized deployment, copy the root `.env.example` to `.env`, set the database connection, Gemini key, frontend origin, and a random `API_LIMIT_HASH_SECRET` (at least 32 characters), then apply database migrations and start the API behind the Nginx gateway:
+For a containerized deployment, copy the root `.env.example` to `.env` and `migration.env.example` to `migration.env`. Set the runtime database credentials in `.env`, the distinct migration-role credentials in `migration.env`, and configure the Gemini key, frontend origin, and a random `API_LIMIT_HASH_SECRET` (at least 32 characters). Then apply migrations using the dedicated migration service and start the API behind the Nginx gateway:
 
 ```powershell
 Copy-Item .env.example .env
+Copy-Item migration.env.example migration.env
 docker compose build
-docker compose run --rm api alembic upgrade head
+docker compose run --rm migrate
 docker compose up -d
 ```
+
+The migration service layers the private `migration.env` over `.env` to replace only the database username and password. The API receives only `.env` and runs with the restricted runtime role. Both roles connect using `sslmode=require` for non-loopback database hosts; ensure your PostgreSQL server supports TLS.
 
 The gateway is published on port `8000` by default (`GATEWAY_PORT` changes it). Only the gateway publishes a host port; the API container is reachable on the private Compose network. Point the frontend's `VITE_API_BASE_URL` at the gateway origin. The configured PostgreSQL service must be reachable from the API container; for Docker Desktop, `host.docker.internal` can reach a database running on the host.
 
