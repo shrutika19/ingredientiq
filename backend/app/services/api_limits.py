@@ -80,6 +80,7 @@ def apply_api_limits(
     *,
     count_analysis: bool,
     count_submission: bool,
+    count_image_extraction: bool = False,
 ) -> None:
     settings = get_settings()
     now = datetime.now(timezone.utc)
@@ -87,6 +88,7 @@ def apply_api_limits(
     daily_bucket = now.date()
     analysis_increment = int(count_analysis)
     submission_increment = int(count_submission)
+    image_extraction_increment = int(count_image_extraction)
     client_key = _client_key(get_client_ip(request))
 
     statement = insert(ApiClientUsage).values(
@@ -96,6 +98,7 @@ def apply_api_limits(
         daily_bucket=daily_bucket,
         daily_analysis_count=analysis_increment,
         daily_submission_count=submission_increment,
+        daily_image_extraction_count=image_extraction_increment,
     )
     statement = statement.on_conflict_do_update(
         index_elements=[ApiClientUsage.client_key],
@@ -125,16 +128,30 @@ def apply_api_limits(
                 ),
                 else_=submission_increment,
             ),
+            "daily_image_extraction_count": case(
+                (
+                    ApiClientUsage.daily_bucket == daily_bucket,
+                    ApiClientUsage.daily_image_extraction_count
+                    + image_extraction_increment,
+                ),
+                else_=image_extraction_increment,
+            ),
             "updated_at": func.now(),
         },
     ).returning(
         ApiClientUsage.minute_request_count,
         ApiClientUsage.daily_analysis_count,
         ApiClientUsage.daily_submission_count,
+        ApiClientUsage.daily_image_extraction_count,
     )
 
     result = db.execute(statement)
-    minute_count, daily_analysis_count, daily_submission_count = result.one()
+    (
+        minute_count,
+        daily_analysis_count,
+        daily_submission_count,
+        daily_image_extraction_count,
+    ) = result.one()
     db.commit()
 
     if minute_count > settings.API_REQUESTS_PER_MINUTE:
@@ -152,7 +169,7 @@ def apply_api_limits(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={
                 "error": "API_RATE_LIMIT_EXCEEDED",
-                "message": "Too many submissions or analysis requests. Try again shortly.",
+                "message": "Too many API requests. Try again shortly.",
             },
             headers={"Retry-After": str(retry_after)},
         )
@@ -195,6 +212,26 @@ def apply_api_limits(
             headers={"Retry-After": str(retry_after)},
         )
 
+    if (
+        count_image_extraction
+        and daily_image_extraction_count
+        > settings.API_DAILY_IMAGE_EXTRACTIONS_PER_IP
+    ):
+        next_day = datetime.combine(
+            daily_bucket + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        )
+        retry_after = max(1, int((next_day - now).total_seconds()))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "error": "DAILY_IMAGE_EXTRACTION_LIMIT_REACHED",
+                "message": "The daily image extraction limit for this IP has been reached.",
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
+
 
 def enforce_submission_limits(
     request: Request,
@@ -217,4 +254,17 @@ def enforce_analysis_limits(
         db,
         count_analysis=True,
         count_submission=False,
+    )
+
+
+def enforce_image_extraction_limits(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> None:
+    apply_api_limits(
+        request,
+        db,
+        count_analysis=False,
+        count_submission=False,
+        count_image_extraction=True,
     )

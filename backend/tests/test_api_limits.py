@@ -118,10 +118,11 @@ def test_api_limit_upsert_is_postgresql_atomic(monkeypatch):
         API_REQUESTS_PER_MINUTE=10,
         API_DAILY_ANALYSES_PER_IP=5,
         API_DAILY_SUBMISSIONS_PER_IP=100,
+        API_DAILY_IMAGE_EXTRACTIONS_PER_IP=10,
     )
     monkeypatch.setattr(api_limits, "get_settings", lambda: settings)
     db = MagicMock()
-    db.execute.return_value.one.return_value = (1, 1, 1)
+    db.execute.return_value.one.return_value = (1, 1, 1, 1)
 
     api_limits.apply_api_limits(
         make_request(),
@@ -138,12 +139,13 @@ def test_api_limit_upsert_is_postgresql_atomic(monkeypatch):
     assert "minute_request_count" in sql
     assert "daily_analysis_count" in sql
     assert "daily_submission_count" in sql
+    assert "daily_image_extraction_count" in sql
     db.commit.assert_called_once()
 
 
 def test_submission_route_enforces_minute_limit(monkeypatch):
     db = MagicMock()
-    db.execute.return_value.one.return_value = (11, 0, 0)
+    db.execute.return_value.one.return_value = (11, 0, 0, 0)
     app.dependency_overrides[get_db] = override_db(db)
     monkeypatch.setattr(
         submissions,
@@ -172,7 +174,7 @@ def test_submission_route_enforces_minute_limit(monkeypatch):
 
 def test_analysis_route_enforces_daily_cap(monkeypatch):
     db = MagicMock()
-    db.execute.return_value.one.return_value = (1, 6, 0)
+    db.execute.return_value.one.return_value = (1, 6, 0, 0)
     app.dependency_overrides[get_db] = override_db(db)
     monkeypatch.setattr(
         analysis,
@@ -201,7 +203,7 @@ def test_analysis_route_enforces_daily_cap(monkeypatch):
 
 def test_submission_route_enforces_daily_cap(monkeypatch):
     db = MagicMock()
-    db.execute.return_value.one.return_value = (1, 0, 101)
+    db.execute.return_value.one.return_value = (1, 0, 101, 0)
     app.dependency_overrides[get_db] = override_db(db)
     monkeypatch.setattr(
         submissions,
@@ -231,12 +233,20 @@ def test_submission_route_enforces_daily_cap(monkeypatch):
         "counts",
         "count_analysis",
         "count_submission",
+        "count_image_extraction",
         "expected_error",
     ),
     [
-        ((11, 1, 0), False, False, "API_RATE_LIMIT_EXCEEDED"),
-        ((1, 6, 0), True, False, "DAILY_ANALYSIS_LIMIT_REACHED"),
-        ((1, 0, 101), False, True, "DAILY_SUBMISSION_LIMIT_REACHED"),
+        ((11, 1, 0, 0), False, False, False, "API_RATE_LIMIT_EXCEEDED"),
+        ((1, 6, 0, 0), True, False, False, "DAILY_ANALYSIS_LIMIT_REACHED"),
+        ((1, 0, 101, 0), False, True, False, "DAILY_SUBMISSION_LIMIT_REACHED"),
+        (
+            (1, 0, 0, 11),
+            False,
+            False,
+            True,
+            "DAILY_IMAGE_EXTRACTION_LIMIT_REACHED",
+        ),
     ],
 )
 def test_limits_return_429_and_retry_after(
@@ -244,6 +254,7 @@ def test_limits_return_429_and_retry_after(
     counts,
     count_analysis,
     count_submission,
+    count_image_extraction,
     expected_error,
 ):
     settings = SimpleNamespace(
@@ -252,6 +263,7 @@ def test_limits_return_429_and_retry_after(
         API_REQUESTS_PER_MINUTE=10,
         API_DAILY_ANALYSES_PER_IP=5,
         API_DAILY_SUBMISSIONS_PER_IP=100,
+        API_DAILY_IMAGE_EXTRACTIONS_PER_IP=10,
     )
     monkeypatch.setattr(api_limits, "get_settings", lambda: settings)
     db = MagicMock()
@@ -263,9 +275,38 @@ def test_limits_return_429_and_retry_after(
             db,
             count_analysis=count_analysis,
             count_submission=count_submission,
+            count_image_extraction=count_image_extraction,
         )
 
     assert error.value.status_code == 429
     assert error.value.detail["error"] == expected_error
     assert int(error.value.headers["Retry-After"]) > 0
     db.commit.assert_called_once()
+
+
+def test_image_extraction_route_enforces_daily_cap(monkeypatch):
+    from app.api.routes import image_extraction
+
+    db = MagicMock()
+    db.execute.return_value.one.return_value = (1, 0, 0, 11)
+    app.dependency_overrides[get_db] = override_db(db)
+    monkeypatch.setattr(
+        image_extraction,
+        "extract_ingredient_text",
+        lambda *args: pytest.fail("image should be rate limited"),
+    )
+
+    try:
+        with TestClient(app, client=("127.0.0.1", 50000)) as client:
+            response = client.post(
+                "/api/v1/ingredients/extract-image",
+                files={"file": ("label.png", b"unused", "image/png")},
+            )
+
+        assert response.status_code == 429
+        assert response.json()["error"]["code"] == (
+            "DAILY_IMAGE_EXTRACTION_LIMIT_REACHED"
+        )
+        assert response.headers["retry-after"]
+    finally:
+        app.dependency_overrides.clear()

@@ -1,13 +1,19 @@
 
+import logging
 from io import BytesIO
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from google.genai import errors
 from pydantic import BaseModel
 from PIL import Image, UnidentifiedImageError
+import httpx
 from starlette.concurrency import run_in_threadpool
 
+from app.services.api_limits import enforce_image_extraction_limits
 from app.services.vision_extraction import extract_ingredient_text
 from app.services.gemini_client import GeminiConfigurationError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/ingredients",
@@ -41,6 +47,7 @@ def reject(status_code: int, code: str, message: str):
 @router.post(
     "/extract-image",
     response_model=ImageExtractionResponse,
+    dependencies=[Depends(enforce_image_extraction_limits)],
 )
 async def extract_image(file: UploadFile = File(...)):
     if file.content_type not in ALLOWED_FORMATS.values():
@@ -83,7 +90,29 @@ async def extract_image(file: UploadFile = File(...)):
             detected_mime,
         )
     except GeminiConfigurationError:
+        logger.warning("Image extraction unavailable: reason=not_configured")
         reject(503, "VISION_UNAVAILABLE", "Extraction unavailable.")
+    except errors.APIError as exc:
+        provider_status = exc.code if isinstance(exc.code, int) else None
+        logger.warning(
+            "Image extraction provider failure: provider_status=%s",
+            provider_status,
+        )
+        reject(
+            503,
+            "VISION_UNAVAILABLE",
+            "Extraction unavailable. Please try again.",
+        )
+    except httpx.TimeoutException:
+        logger.warning("Image extraction provider failure: reason=timeout")
+        reject(504, "VISION_TIMEOUT", "Extraction timed out. Please try again.")
+    except httpx.RequestError:
+        logger.warning("Image extraction provider failure: reason=network")
+        reject(
+            503,
+            "VISION_UNAVAILABLE",
+            "Extraction unavailable. Please try again.",
+        )
 
     if not text:
         return ImageExtractionResponse(

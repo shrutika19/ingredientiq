@@ -12,7 +12,7 @@ from app.api.routes import submissions
 
 def fake_db():
     db = MagicMock()
-    db.execute.return_value.one.return_value = (1, 0, 1)
+    db.execute.return_value.one.return_value = (1, 0, 1, 0)
     yield db
 
 
