@@ -175,12 +175,12 @@ function IngredientAnalyzer() {
     clearSubmissionIdFromUrl()
   }
 
-  async function handleSubmit() {
+  async function handleSubmit(textToSubmit = ingredientText) {
     if (submitRequestRef.current) {
       return
     }
 
-    const normalizedText = ingredientText.trim()
+    const normalizedText = textToSubmit.trim()
     if (normalizedText.length < 3 || normalizedText.length > 10000) {
       setSubmission(null)
       setToast({
@@ -193,6 +193,7 @@ function IngredientAnalyzer() {
       return
     }
 
+    setIngredientText(normalizedText)
     submitRequestRef.current = true
     setIsSubmitting(true)
     setSubmission(null)
@@ -314,7 +315,10 @@ function IngredientAnalyzer() {
               onSubmit={handleSubmit}
             />
           ) : (
-            <UploadImageTab />
+            <UploadImageTab
+              isSubmitting={isBusy}
+              onAnalyze={(text) => void handleSubmit(text)}
+            />
           )}
 
           {submissionId && (
@@ -337,7 +341,8 @@ function IngredientAnalyzer() {
 
           <p className="border-t border-[#eeeee8] px-6 py-4 text-center text-[11px] leading-5 text-[#92958d] sm:px-8">
             Ingredient text is submitted to the API. AI analysis is provided
-            by the IngredientIQ backend; image upload is not active yet.
+            by the IngredientIQ backend. Uploaded images are used to extract
+            ingredient text for your review before submission.
           </p>
         </div>
       </div>

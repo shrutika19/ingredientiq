@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     API_REQUESTS_PER_MINUTE: int = Field(default=10, ge=1)
     API_DAILY_ANALYSES_PER_IP: int = Field(default=5, ge=1)
     API_DAILY_SUBMISSIONS_PER_IP: int = Field(default=100, ge=1)
+    API_DAILY_IMAGE_EXTRACTIONS_PER_IP: int = Field(default=10, ge=1)
     API_LIMIT_HASH_SECRET: SecretStr | None = None
     TRUSTED_PROXY_IPS: list[str] = Field(default_factory=list)
 
